@@ -53,6 +53,8 @@ export interface CheckResult {
   name: string;
   status: 'PASS' | 'FAIL' | 'WARN';
   message: string;
+  evidence?: any; // Machine-readable data about the failure
+  recommendedFix?: string; // AI-readable (or human-readable) hint
 }
 
 export interface VerificationReport {
@@ -80,7 +82,7 @@ export interface AppDefinition {
 export interface SystemLog {
   id: string;
   timestamp: number;
-  source: 'HOST' | 'GUEST' | 'VALIDATOR';
+  source: 'HOST' | 'GUEST' | 'VALIDATOR' | 'STORAGE';
   type: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
   message: string;
 }
@@ -94,17 +96,34 @@ export interface InteractionTrace {
   event: string;    // The logical event name
 }
 
-export interface ArchitectureChangeTrace {
+export interface MigrationStats {
+  preserved: number;
+  dropped: number;
+  added: number;
+  details: string;
+}
+
+// The "Change Journal" Entry
+export interface ChangeRecord {
   id: string;
   timestamp: number;
   prompt: string;
   status: 'accepted' | 'rejected' | 'rolled_back';
-  verificationScore: number;
+  failureReason?: string; // If rolled back or rejected due to crash
+  
+  // Snapshots for Replay/Diffing
+  oldDef: AppDefinition;
+  newDef: AppDefinition;
+  
+  // Flight Recorder Data
+  verificationReport: VerificationReport;
+  verificationScore: number; 
   diff: {
-    uiNodes: number; // Delta count
-    states: number;  // Delta count
-    dataKeys: number; // Delta count
+    uiNodes: number;
+    states: number;
+    dataKeys: number;
   };
+  migration?: MigrationStats;
   latencyMs: number;
   version: string;
 }

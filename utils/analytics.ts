@@ -1,4 +1,4 @@
-import { AppDefinition, ViewNode, ArchitectureChangeTrace, SessionMetrics } from '../types';
+import { AppDefinition, ViewNode, ChangeRecord, SessionMetrics } from '../types';
 
 /**
  * 9.5 Quantitative Metrics Helpers
@@ -29,7 +29,7 @@ export function computeDiff(prev: AppDefinition, next: AppDefinition) {
   };
 }
 
-export function computeSessionMetrics(history: ArchitectureChangeTrace[], interactionCount: number): SessionMetrics {
+export function computeSessionMetrics(history: ChangeRecord[], interactionCount: number): SessionMetrics {
   const totalProposals = history.length;
   if (totalProposals === 0) {
     return {

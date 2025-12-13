@@ -1,16 +1,19 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { generateAppProposal } from './services/gemini';
+import { Persistence } from './services/persistence';
 import { HostRuntime } from './components/HostRuntime';
 import { LabConsole } from './components/LabConsole';
 import { INITIAL_APP } from './constants';
-import { AppDefinition, SystemLog, AppContext, VerificationReport, ArchitectureChangeTrace, InteractionTrace } from './types';
+import { AppDefinition, SystemLog, AppContext, VerificationReport, ChangeRecord, InteractionTrace } from './types';
 import { verifyProposal } from './utils/validator';
 import { computeDiff, computeSessionMetrics } from './utils/analytics';
-import { Terminal, Cpu, ShieldCheck, Activity, BrainCircuit, RefreshCw, AlertTriangle, CheckCircle, XCircle, Microscope, GitCommit } from 'lucide-react';
+import { migrateContext } from './utils/migration';
+import { Terminal, Cpu, ShieldCheck, Activity, BrainCircuit, RefreshCw, AlertTriangle, CheckCircle, XCircle, Microscope, GitCommit, Database } from 'lucide-react';
 
 export default function App() {
   const [appDef, setAppDef] = useState<AppDefinition>(INITIAL_APP);
   const [context, setContext] = useState<AppContext>(INITIAL_APP.initialContext);
+  const [isLoaded, setIsLoaded] = useState(false);
   
   const [prompt, setPrompt] = useState('');
   const [isSynthesizing, setIsSynthesizing] = useState(false);
@@ -20,7 +23,7 @@ export default function App() {
 
   // 9. Observability State
   const [viewMode, setViewMode] = useState<'control' | 'lab'>('control');
-  const [changeHistory, setChangeHistory] = useState<ArchitectureChangeTrace[]>([]);
+  const [changeHistory, setChangeHistory] = useState<ChangeRecord[]>([]);
   const [interactions, setInteractions] = useState<InteractionTrace[]>([]);
   
   const logsEndRef = useRef<HTMLDivElement>(null);
@@ -36,6 +39,77 @@ export default function App() {
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
+
+  // --- PERSISTENCE LAYER ---
+  
+  // Load on Mount
+  useEffect(() => {
+      const snapshot = Persistence.load();
+      if (snapshot) {
+          setAppDef(snapshot.definition);
+          setContext(snapshot.context);
+          addLog({ id: 'boot-persist', timestamp: Date.now(), source: 'STORAGE', type: 'SUCCESS', message: `Restored state from ${new Date(snapshot.timestamp).toLocaleTimeString()}` });
+      } else {
+          addLog({ id: 'boot-init', timestamp: Date.now(), source: 'STORAGE', type: 'INFO', message: 'No saved state found. Starting fresh.' });
+      }
+      
+      const journal = Persistence.loadJournal();
+      if (journal && journal.length > 0) {
+          setChangeHistory(journal);
+          addLog({ id: 'boot-journal', timestamp: Date.now(), source: 'STORAGE', type: 'INFO', message: `Loaded ${journal.length} records from Change Journal.` });
+      }
+
+      setIsLoaded(true);
+  }, [addLog]);
+
+  // Save Snapshot on Update
+  useEffect(() => {
+      if (!isLoaded) return;
+      Persistence.save(appDef, context);
+  }, [appDef, context, isLoaded]);
+
+  // Save Journal on Update
+  useEffect(() => {
+      if (!isLoaded) return;
+      if (changeHistory.length > 0) {
+          Persistence.saveJournal(changeHistory);
+      }
+  }, [changeHistory, isLoaded]);
+
+  // --- FAULT TOLERANCE ---
+  const handleRuntimeError = useCallback((error: Error) => {
+      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `CRITICAL: ${error.message}` });
+      
+      setChangeHistory(prev => {
+          if (prev.length === 0) return prev;
+          
+          const latest = prev[0];
+          // Only rollback if it was just accepted and we haven't already rolled back
+          if (latest.status === 'accepted') {
+              // Update the record to reflect failure
+              const updatedRecord: ChangeRecord = { 
+                  ...latest, 
+                  status: 'rolled_back', 
+                  failureReason: error.message 
+              };
+              
+              addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'WARN', message: `Automatic Rollback to v${latest.oldDef.version}` });
+              
+              // Perform State Revert
+              setAppDef(latest.oldDef);
+              
+              // Attempt to salvage data by migrating backwards
+              // We use the *current* context (which might have crashed data) and try to fit it into the *old* schema
+              // This ensures we don't lose user data entered just before the crash if possible.
+              const migration = migrateContext(context, latest.oldDef);
+              setContext(migration.context);
+              
+              return [updatedRecord, ...prev.slice(1)];
+          }
+          return prev;
+      });
+  }, [context, addLog]); // Context dependency ensures we have latest data for migration
+
 
   const handleSynthesize = async () => {
     if (!prompt.trim()) return;
@@ -58,21 +132,32 @@ export default function App() {
       setVerificationReport(report);
 
       const diff = computeDiff(appDef, proposal);
-      const trace: ArchitectureChangeTrace = {
+      
+      // Calculate Migration Preview
+      const migrationResult = migrateContext(context, proposal);
+
+      // Create Full Change Record
+      const record: ChangeRecord = {
           id: crypto.randomUUID(),
           timestamp: Date.now(),
           prompt,
           version: proposal.version,
           status: report.passed ? 'accepted' : 'rejected',
+          
+          oldDef: appDef, // Snapshot for Replay
+          newDef: proposal, // Snapshot for Replay
+
+          verificationReport: report,
           verificationScore: report.score,
           diff,
+          migration: migrationResult.stats,
           latencyMs: Date.now() - startTime
       };
 
       if (!report.passed) {
         addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'ERROR', message: `Verification Failed (Score: ${report.score})` });
         setError(`Proposal Rejected: Critical Verification Failure.`);
-        setChangeHistory(prev => [trace, ...prev]);
+        setChangeHistory(prev => [record, ...prev]);
       } else {
         if (report.score < 100) {
             addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'WARN', message: `Proposal Accepted with Warnings (Score: ${report.score})` });
@@ -80,22 +165,13 @@ export default function App() {
             addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'SUCCESS', message: `Proposal Verified (Score: 100)` });
         }
 
-        // 3. Actuation Phase (Hot Swap)
-        setContext(prev => {
-            const nextContext = { ...proposal.initialContext };
-            Object.keys(nextContext).forEach(key => {
-                if (prev[key] !== undefined) {
-                    nextContext[key] = prev[key];
-                }
-            });
-            return nextContext;
-        });
-
+        // 3. Actuation Phase (Hot Swap with Migration)
+        setContext(migrationResult.context);
         setAppDef(proposal);
         setPrompt('');
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: `Hot-swapped to v${proposal.version}` });
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: `Migrated to v${proposal.version}. Preserved ${migrationResult.stats.preserved} keys.` });
         
-        setChangeHistory(prev => [trace, ...prev]);
+        setChangeHistory(prev => [record, ...prev]);
       }
 
     } catch (e: any) {
@@ -104,6 +180,28 @@ export default function App() {
     } finally {
       setIsSynthesizing(false);
     }
+  };
+
+  const handleReplay = useCallback(async (record: ChangeRecord) => {
+      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'WARN', message: `REPLAYING ARCHITECTURE: v${record.version}` });
+      
+      // Re-run validation to prove determinism
+      const report = await verifyProposal(record.newDef);
+      
+      // Hot swap to the recorded definition
+      setAppDef(record.newDef);
+      // Note: We do NOT revert context data perfectly here because that's complex, 
+      // but we do migrate the *current* context to the *old* schema to ensure it works.
+      const migration = migrateContext(context, record.newDef);
+      setContext(migration.context);
+
+      setVerificationReport(report); // Show the re-verified report
+      setViewMode('control'); // Switch back to control view to see effect
+  }, [context, addLog]);
+
+  const handleReset = () => {
+      Persistence.reset();
+      window.location.reload();
   };
 
   const metrics = computeSessionMetrics(changeHistory, interactions.length);
@@ -119,9 +217,14 @@ export default function App() {
             <span className="font-semibold text-zinc-100 tracking-tight">NeuroNote</span>
             <span className="text-xs px-2 py-0.5 bg-zinc-800 rounded text-zinc-400">Host Runtime</span>
           </div>
-          <div className="text-xs text-zinc-500 flex items-center gap-2">
-            <span className={isSynthesizing ? "animate-pulse text-indigo-400" : "text-green-500"}>●</span>
-            {isSynthesizing ? "GUEST ACTIVE" : "HOST SECURE"}
+          <div className="flex items-center gap-4">
+            <button onClick={handleReset} className="text-xs text-zinc-600 hover:text-rose-500 transition-colors flex items-center gap-1">
+                <Database className="w-3 h-3" /> Reset Storage
+            </button>
+            <div className="text-xs text-zinc-500 flex items-center gap-2">
+                <span className={isSynthesizing ? "animate-pulse text-indigo-400" : "text-green-500"}>●</span>
+                {isSynthesizing ? "GUEST ACTIVE" : "HOST SECURE"}
+            </div>
           </div>
         </header>
 
@@ -132,6 +235,7 @@ export default function App() {
              setContext={setContext}
              onLog={addLog}
              onInteraction={recordInteraction}
+             onRuntimeError={handleRuntimeError}
            />
         </main>
       </div>
@@ -156,7 +260,12 @@ export default function App() {
         </div>
 
         {viewMode === 'lab' ? (
-            <LabConsole metrics={metrics} history={changeHistory} interactions={interactions} />
+            <LabConsole 
+                metrics={metrics} 
+                history={changeHistory} 
+                interactions={interactions} 
+                onReplay={handleReplay} 
+            />
         ) : (
             <>
                 {/* Verification Report Card */}
@@ -174,14 +283,21 @@ export default function App() {
                                 ...verificationReport.checks.semantic,
                                 ...verificationReport.checks.honesty
                             ].map((check, idx) => (
-                                <div key={idx} className="flex items-start gap-2">
-                                    {check.status === 'PASS' && <CheckCircle className="w-3 h-3 text-emerald-500 mt-0.5" />}
-                                    {check.status === 'FAIL' && <XCircle className="w-3 h-3 text-rose-500 mt-0.5" />}
-                                    {check.status === 'WARN' && <AlertTriangle className="w-3 h-3 text-amber-500 mt-0.5" />}
-                                    <div className="flex-1">
-                                        <span className="font-semibold text-zinc-300">{check.name}:</span>
-                                        <span className="text-zinc-500 ml-1">{check.message}</span>
+                                <div key={idx} className="flex flex-col gap-1 border-b border-zinc-800/50 pb-2 last:border-0">
+                                    <div className="flex items-center gap-2">
+                                        {check.status === 'PASS' && <CheckCircle className="w-3 h-3 text-emerald-500 shrink-0" />}
+                                        {check.status === 'FAIL' && <XCircle className="w-3 h-3 text-rose-500 shrink-0" />}
+                                        {check.status === 'WARN' && <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0" />}
+                                        <span className="font-bold text-zinc-300">{check.name}</span>
                                     </div>
+                                    <div className="pl-5 text-zinc-500">{check.message}</div>
+                                    {/* Show Recommendation if failed */}
+                                    {(check.status === 'FAIL' || check.status === 'WARN') && check.recommendedFix && (
+                                        <div className="pl-5 text-indigo-400 font-mono flex gap-1">
+                                            <span>→</span>
+                                            <span>{check.recommendedFix}</span>
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -203,7 +319,8 @@ export default function App() {
                                 <span className={`font-bold mr-2 ${
                                     log.source === 'HOST' ? 'text-indigo-400' :
                                     log.source === 'GUEST' ? 'text-emerald-400' : 
-                                    log.source === 'VALIDATOR' ? 'text-amber-400' : 'text-rose-400'
+                                    log.source === 'VALIDATOR' ? 'text-amber-400' : 
+                                    log.source === 'STORAGE' ? 'text-blue-400' : 'text-rose-400'
                                 }`}>[{log.source}]</span>
                                 <span className={log.type === 'ERROR' ? 'text-rose-500' : log.type === 'WARN' ? 'text-amber-500' : 'text-zinc-400'}>{log.message}</span>
                             </div>

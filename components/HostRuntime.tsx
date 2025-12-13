@@ -9,9 +9,47 @@ interface HostRuntimeProps {
   setContext: React.Dispatch<React.SetStateAction<AppContext>>;
   onLog: (log: SystemLog) => void;
   onInteraction: (trace: InteractionTrace) => void;
+  onRuntimeError?: (error: Error) => void;
 }
 
-export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, setContext, onLog, onInteraction }) => {
+class RuntimeErrorBoundary extends React.Component<
+  { onError?: (error: Error) => void; children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    if (this.props.onError) {
+        this.props.onError(error);
+    }
+    console.error("Runtime Crash:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full text-rose-500 space-y-4 p-8 animate-in fade-in duration-500">
+          <Icons.AlertOctagon className="w-16 h-16 opacity-50" />
+          <div className="text-center">
+            <h3 className="font-bold text-lg">System Integrity Violation</h3>
+            <p className="text-sm text-rose-400/80 font-mono mt-2">The Guest Architecture triggered a critical runtime fault.</p>
+            <p className="text-xs text-rose-500/50 font-mono mt-1">Automatic rollback sequence initiated...</p>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, setContext, onLog, onInteraction, onRuntimeError }) => {
   const kernelRef = useRef<WasmKernel | null>(null);
   const [isKernelReady, setIsKernelReady] = useState(false);
   const [governanceError, setGovernanceError] = useState<string | null>(null);
@@ -211,23 +249,25 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
   }
 
   return (
-    <div className="w-full h-full relative">
-        {governanceError && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-rose-950/90 border border-rose-800 text-rose-200 px-4 py-2 rounded-lg text-xs shadow-xl flex items-center gap-2">
-                <Icons.AlertTriangle className="w-4 h-4" />
-                <span>{governanceError}</span>
-                <button onClick={() => setGovernanceError(null)} className="ml-2 hover:text-white"><Icons.X className="w-3 h-3" /></button>
+    <RuntimeErrorBoundary onError={onRuntimeError}>
+        <div className="w-full h-full relative">
+            {governanceError && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-rose-950/90 border border-rose-800 text-rose-200 px-4 py-2 rounded-lg text-xs shadow-xl flex items-center gap-2">
+                    <Icons.AlertTriangle className="w-4 h-4" />
+                    <span>{governanceError}</span>
+                    <button onClick={() => setGovernanceError(null)} className="ml-2 hover:text-white"><Icons.X className="w-3 h-3" /></button>
+                </div>
+            )}
+            
+            {renderNode(definition.view, 'root')}
+            
+            <div className="absolute bottom-2 right-2 px-2 py-1 bg-black/50 text-[10px] text-zinc-500 rounded pointer-events-none flex items-center gap-2">
+                <Icons.Lock className="w-3 h-3 text-emerald-500" />
+                <span>WASM/Worker</span>
+                <span className="w-[1px] h-3 bg-zinc-800 mx-1"></span>
+                <span>16MB Cap</span>
             </div>
-        )}
-        
-        {renderNode(definition.view, 'root')}
-        
-        <div className="absolute bottom-2 right-2 px-2 py-1 bg-black/50 text-[10px] text-zinc-500 rounded pointer-events-none flex items-center gap-2">
-            <Icons.Lock className="w-3 h-3 text-emerald-500" />
-            <span>WASM/Worker</span>
-            <span className="w-[1px] h-3 bg-zinc-800 mx-1"></span>
-            <span>16MB Cap</span>
         </div>
-    </div>
+    </RuntimeErrorBoundary>
   );
 };
