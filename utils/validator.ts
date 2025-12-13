@@ -5,6 +5,8 @@ import { AppDefinition, ViewNode, VerificationReport, CheckResult, TestVector, M
  * This module implements the 3-Phase Gatekeeper Pipeline.
  */
 
+const OPCODES = ['SET', 'APPEND', 'RESET', 'TOGGLE', 'SPAWN', 'DELETE'];
+
 // --- PHASE A: STRUCTURAL VALIDATION ---
 
 function validateStructure(node: ViewNode, errors: CheckResult[]) {
@@ -20,6 +22,17 @@ function validateStructure(node: ViewNode, errors: CheckResult[]) {
     });
   }
 
+  // Structural check for forbidden opcodes in Event Handlers
+  if (node.onClick && OPCODES.some(op => node.onClick!.startsWith(op + ':'))) {
+      errors.push({
+          name: 'Separation of Concerns',
+          status: 'FAIL',
+          message: `UI Event '${node.onClick}' looks like an Action Opcode.`,
+          evidence: { nodeId: node.id, event: node.onClick },
+          recommendedFix: `Rename event to a verb (e.g., 'ADD_ITEM') and define the '${node.onClick}' logic inside the Machine.`
+      });
+  }
+
   if (node.children) {
     node.children.forEach(child => validateStructure(child, errors));
   }
@@ -27,10 +40,11 @@ function validateStructure(node: ViewNode, errors: CheckResult[]) {
 
 // --- PHASE B: SEMANTIC VALIDATION ---
 
-function validateBindings(node: ViewNode, context: Record<string, any>, results: CheckResult[]) {
+function validateBindings(node: ViewNode, context: Record<string, any>, results: CheckResult[], isScoped = false) {
   // Check Text Bindings
   if (node.textBinding) {
-    if (context[node.textBinding] === undefined) {
+    // Only warn if we are NOT in a scoped context (like a list item)
+    if (!isScoped && context[node.textBinding] === undefined) {
       results.push({ 
         name: 'Data Binding', 
         status: 'WARN', 
@@ -42,7 +56,18 @@ function validateBindings(node: ViewNode, context: Record<string, any>, results:
   }
   // Check Value Bindings
   if (node.valueBinding) {
-    if (context[node.valueBinding] === undefined) {
+    // Specific check for List components misused with valueBinding
+    if (node.type === 'list') {
+         results.push({
+             name: 'Semantic Convention',
+             status: 'WARN',
+             message: 'Lists should use "textBinding" for their data source, not "valueBinding".',
+             evidence: { nodeId: node.id },
+             recommendedFix: 'Move the binding key to "textBinding".'
+         });
+    }
+
+    if (!isScoped && context[node.valueBinding] === undefined) {
       results.push({ 
         name: 'Data Binding', 
         status: 'WARN', 
@@ -54,8 +79,43 @@ function validateBindings(node: ViewNode, context: Record<string, any>, results:
   }
   
   if (node.children) {
-    node.children.forEach(child => validateBindings(child, context, results));
+    // If current node is a list, its children are templates for items, so they have their own scope.
+    const nextIsScoped = isScoped || node.type === 'list';
+    node.children.forEach(child => validateBindings(child, context, results, nextIsScoped));
   }
+}
+
+function validateActionHazards(machine: MachineDefinition, results: CheckResult[]) {
+    Object.entries(machine.states).forEach(([stateName, stateDef]) => {
+        if (!stateDef.on) return;
+        Object.entries(stateDef.on).forEach(([eventName, transition]) => {
+            if (typeof transition === 'string') return;
+            if (!transition.actions) return;
+            
+            // Check for Reset-Before-Use Hazard
+            const resetKeys = new Set<string>();
+            transition.actions.forEach((action, index) => {
+                const parts = action.split(':');
+                const opcode = parts[0];
+                
+                if (opcode === 'RESET') {
+                    resetKeys.add(parts[1]);
+                } else if (opcode === 'APPEND' || opcode === 'SPAWN') {
+                    // APPEND:source:target
+                    const source = parts[1];
+                    if (resetKeys.has(source)) {
+                        results.push({
+                            name: 'Logic Hazard (Race Condition)',
+                            status: 'FAIL',
+                            message: `Action Hazard in state '${stateName}' on '${eventName}': '${source}' is RESET before it is used in ${opcode}.`,
+                            evidence: { actions: transition.actions },
+                            recommendedFix: `Reorder actions: perform ${opcode} BEFORE Resetting '${source}'.`
+                        });
+                    }
+                }
+            });
+        });
+    });
 }
 
 function validateEventWiring(view: ViewNode, machine: MachineDefinition, results: CheckResult[]) {
@@ -183,9 +243,26 @@ function executeTestVectors(proposal: AppDefinition, results: CheckResult[]) {
       
       // Simulate Steps
       for (const step of vector.steps) {
+        
+        // 1. Explicitly Block Actions masquerading as Events
+        const opcode = step.event.split(':')[0];
+        if (OPCODES.includes(opcode)) {
+             throw new Error(`Invalid Vector Event '${step.event}'. Test Vectors must trigger Machine Events (keys in 'states.on'), NOT Action Opcodes.`);
+        }
+
+        // Handle System Events (UPDATE_CONTEXT)
+        if (step.event.startsWith('UPDATE_CONTEXT')) {
+            const parts = step.event.split(':');
+            const key = parts[1];
+            if (key) {
+                contextKeysChanged.add(key);
+            }
+            continue; // Skip state check for system events
+        }
+
         const stateDef = proposal.machine.states[currentState];
         if (!stateDef || !stateDef.on || !stateDef.on[step.event]) {
-          throw new Error(`State '${currentState}' cannot handle event '${step.event}'`);
+          throw new Error(`State '${currentState}' cannot handle event '${step.event}'. (Hint: Did you use an Action opcode like SET/APPEND instead of a Machine Event?)`);
         }
         
         const transition = stateDef.on[step.event];
@@ -238,7 +315,7 @@ function executeTestVectors(proposal: AppDefinition, results: CheckResult[]) {
         status: 'FAIL', 
         message: `Simulation Error: ${e.message}`,
         evidence: { error: e.message },
-        recommendedFix: 'Check event names and state definitions.'
+        recommendedFix: 'Check event names and state definitions. Do not use Action opcodes as Events.'
       });
     }
   });
@@ -268,6 +345,7 @@ export async function verifyProposal(proposal: AppDefinition): Promise<Verificat
   validateBindings(proposal.view, proposal.initialContext, report.checks.semantic);
   validateEventWiring(proposal.view, proposal.machine, report.checks.semantic);
   validateReachability(proposal.machine, report.checks.semantic);
+  validateActionHazards(proposal.machine, report.checks.semantic);
 
   // 3. Honesty
   executeTestVectors(proposal, report.checks.honesty);

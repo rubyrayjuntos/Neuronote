@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, ReactNode, ErrorInfo } from 'react';
 import { AppDefinition, ViewNode, AppContext, SystemLog, InteractionTrace } from '../types';
 import { WasmKernel } from '../services/WasmKernel';
 import * as Icons from 'lucide-react';
@@ -12,20 +12,23 @@ interface HostRuntimeProps {
   onRuntimeError?: (error: Error) => void;
 }
 
-class RuntimeErrorBoundary extends React.Component<
-  { onError?: (error: Error) => void; children: React.ReactNode },
-  { hasError: boolean }
-> {
-  constructor(props: any) {
-    super(props);
-    this.state = { hasError: false };
-  }
+interface ErrorBoundaryProps {
+    onError?: (error: Error) => void;
+    children?: ReactNode;
+}
 
-  static getDerivedStateFromError(error: Error) {
+interface ErrorBoundaryState {
+    hasError: boolean;
+}
+
+class RuntimeErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { hasError: true };
   }
 
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     if (this.props.onError) {
         this.props.onError(error);
     }
@@ -204,7 +207,8 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
       case 'button': return <button {...commonProps} onClick={handleClick}>{props.label || childrenContent || 'Button'}</button>;
       case 'input': return <input {...commonProps} value={valueBinding ? (data[valueBinding] || '') : undefined} onChange={handleInput} />;
       case 'list':
-          const key = props.binding || textBinding;
+          // PERMISSIVE FIX: Check all binding props to prevent empty list if AI gets it wrong
+          const key = props.binding || textBinding || valueBinding;
           const items = (key && Array.isArray(data[key])) ? data[key] : [];
           return (
               <div {...commonProps}>

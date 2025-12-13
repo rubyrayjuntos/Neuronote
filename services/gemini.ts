@@ -44,8 +44,8 @@ interface ViewNode {
   type: 'container' | 'text' | 'button' | 'input' | 'header' | 'list' | 'tabs' | 'card';
   props?: Record<string, any>;
   children?: ViewNode[];
-  textBinding?: string;
-  valueBinding?: string;
+  textBinding?: string; // USE THIS for List data source or Text content
+  valueBinding?: string; // USE THIS for Input values
   onClick?: string;
   onChange?: string;
 }
@@ -59,6 +59,7 @@ The Host Runtime strictly enforces these actions. Any other action string will c
 
 2. "APPEND:sourceKey:targetArrayKey"
    - Pushes context[sourceKey] into context[targetArrayKey].
+   - **WARNING**: If context[sourceKey] is empty, APPEND does nothing.
 
 3. "RESET:key"
    - Sets context[key] to empty string.
@@ -72,12 +73,62 @@ The Host Runtime strictly enforces these actions. Any other action string will c
 6. "DELETE"
    - Destroys the current actor instance (invalid in root scope).
 
-VERIFICATION REQUIREMENT:
-You must provide at least one TestVector to prove your features work. 
-For example, if you add a "Todo List", provide a vector that fires "ADD_TASK" and expects "items" to change in context.
+CRITICAL RULES FOR "LOGIC-AS-DATA":
 
-DATA PERSISTENCE:
-Keep matching keys in 'initialContext' to preserve user data during hot-swaps.
+1. **SEPARATE EVENTS FROM ACTIONS**:
+   - **Events** (Inputs) are simple strings like "ADD_TASK", "CANCEL", "SAVE".
+   - **Actions** (Outputs) are Opcode strings like "APPEND:task:list", "RESET:task".
+   - **UI**: 'onClick' must be an EVENT ("ADD_TASK"), *never* an ACTION ("APPEND:...").
+   - **TestVectors**: 'event' must be an EVENT ("ADD_TASK"), *never* an ACTION.
+
+2. **ACTION ORDER HAZARD**:
+   - You MUST 'APPEND' data *before* you 'RESET' it.
+   - **CORRECT**: actions: ["APPEND:input:list", "RESET:input"]
+   - **WRONG**:   actions: ["RESET:input", "APPEND:input:list"] (This appends nothing!)
+
+3. **INPUT BINDING**:
+   - Use 'valueBinding' on inputs. The Host handles updates automatically.
+   - **DO NOT** use 'onChange' to update the input's value manually.
+   - Only use 'onChange' if you need to trigger a Machine Event immediately.
+
+4. **LIST BINDING**:
+   - Lists MUST use 'textBinding' to point to the array in context.
+
+CORRECT DEFINITION EXAMPLE:
+{
+  "version": "v1.0.0",
+  "initialContext": { "count": 0, "log": [] },
+  "machine": {
+    "initial": "idle",
+    "states": {
+      "idle": {
+        "on": {
+          "INCREMENT": { 
+             "actions": ["SET:count:1", "APPEND:count:log"] 
+          } 
+        }
+      }
+    }
+  },
+  "view": {
+    "id": "root", "type": "container",
+    "children": [
+      { "id": "btn", "type": "button", "onClick": "INCREMENT", "props": { "label": "Add" } },
+      // Lists use textBinding for the array
+      { "id": "history", "type": "list", "textBinding": "log" }
+    ]
+  },
+  "testVectors": [
+    {
+      "name": "Click adds 1",
+      "initialState": "idle",
+      "steps": [
+        // EVENT NAME ONLY. NO OPCODES.
+        { "event": "INCREMENT", "expectContextKeys": ["count", "log"] } 
+      ]
+    }
+  ]
+}
 
 CURRENT APP DEFINITION:
 ${JSON.stringify(currentDef, null, 2)}
