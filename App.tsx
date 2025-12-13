@@ -7,7 +7,7 @@ import { INITIAL_APP } from './constants';
 import { AppDefinition, SystemLog, AppContext, VerificationReport, ChangeRecord, InteractionTrace } from './types';
 import { verifyProposal } from './utils/validator';
 import { computeDiff, computeSessionMetrics } from './utils/analytics';
-import { migrateContext } from './utils/migration';
+import { migrateContext, salvageContext } from './utils/migration';
 import { Terminal, Cpu, ShieldCheck, Activity, BrainCircuit, RefreshCw, AlertTriangle, CheckCircle, XCircle, Microscope, GitCommit, Database } from 'lucide-react';
 
 export default function App() {
@@ -98,11 +98,10 @@ export default function App() {
               // Perform State Revert
               setAppDef(latest.oldDef);
               
-              // Attempt to salvage data by migrating backwards
-              // We use the *current* context (which might have crashed data) and try to fit it into the *old* schema
-              // This ensures we don't lose user data entered just before the crash if possible.
-              const migration = migrateContext(context, latest.oldDef);
-              setContext(migration.context);
+              // RECOVERY LENS: Salvage data from the broken context back into the old schema
+              // This uses the Lens.put() operation
+              const salvagedContext = salvageContext(context, latest.oldDef);
+              setContext(salvagedContext);
               
               return [updatedRecord, ...prev.slice(1)];
           }
@@ -133,7 +132,7 @@ export default function App() {
 
       const diff = computeDiff(appDef, proposal);
       
-      // Calculate Migration Preview
+      // Calculate Migration Preview (Lens.get)
       const migrationResult = migrateContext(context, proposal);
 
       // Create Full Change Record
@@ -190,8 +189,8 @@ export default function App() {
       
       // Hot swap to the recorded definition
       setAppDef(record.newDef);
-      // Note: We do NOT revert context data perfectly here because that's complex, 
-      // but we do migrate the *current* context to the *old* schema to ensure it works.
+      
+      // Lens.get() for replay
       const migration = migrateContext(context, record.newDef);
       setContext(migration.context);
 

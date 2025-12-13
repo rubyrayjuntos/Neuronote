@@ -50,13 +50,27 @@ interface ViewNode {
   onChange?: string;
 }
 
-ACTOR MODEL & LOGIC:
-1. "SPAWN:actorType:targetArrayKey" -> Creates a new actor instance.
-2. "APPEND:sourceKey:targetArrayKey" -> Pushes context[sourceKey] into context[targetArrayKey].
-3. "RESET:key" -> Sets context[key] to empty string.
-4. "TOGGLE:key" -> Toggles boolean.
-5. "SET:key:value" -> Sets literal value.
-6. "DELETE" -> Removes current actor instance.
+HOST CAPABILITY MANIFEST (The Allowlist):
+The Host Runtime strictly enforces these actions. Any other action string will cause a Governance Violation.
+
+1. "SPAWN:actorType:targetArrayKey"
+   - Creates a new actor instance in context[targetArrayKey].
+   - Requires 'actorType' to be defined in 'actors'.
+
+2. "APPEND:sourceKey:targetArrayKey"
+   - Pushes context[sourceKey] into context[targetArrayKey].
+
+3. "RESET:key"
+   - Sets context[key] to empty string.
+
+4. "TOGGLE:key"
+   - Toggles boolean context[key].
+
+5. "SET:key:value"
+   - Sets context[key] to literal 'value'.
+
+6. "DELETE"
+   - Destroys the current actor instance (invalid in root scope).
 
 VERIFICATION REQUIREMENT:
 You must provide at least one TestVector to prove your features work. 
