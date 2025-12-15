@@ -1,17 +1,49 @@
-import { AppDefinition, ViewNode, VerificationReport, CheckResult, TestVector, MachineDefinition } from '../types';
+import { AppDefinition, ViewNode, VerificationReport, CheckResult, TestVector, MachineDefinition, PipelineDefinition, PipelineNode } from '../types';
+import { OPERATOR_REGISTRY } from '../constants';
 
 /**
  * 7. Verification & Trust Assurance
  * This module implements the 3-Phase Gatekeeper Pipeline.
  */
 
-const OPCODES = ['SET', 'APPEND', 'RESET', 'TOGGLE', 'SPAWN', 'DELETE'];
+const OPCODES = ['SET', 'APPEND', 'RESET', 'TOGGLE', 'SPAWN', 'DELETE', 'ASSIGN', 'RUN'];
+
+// THE STANDARD LIBRARY ALLOWLIST
+const ALLOWED_OPS = Object.keys(OPERATOR_REGISTRY);
+
+const MAX_TREE_DEPTH = 50; 
+const MAX_PIPELINE_NODES = 50; // Prevention of Graph Bombs
+
+const SAFE_TAGS = [
+    'div', 'span', 'p', 'article', 'section', 'main', 'aside', 'header', 'footer', 'nav',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
+    'ul', 'ol', 'li', 'dl', 'dt', 'dd',
+    'img', 'figure', 'figcaption',
+    'table', 'thead', 'tbody', 'tr', 'td', 'th',
+    'button', 'input', 'label', 'form', 
+    'hr', 'br', 'pre', 'code', 'blockquote'
+];
 
 // --- PHASE A: STRUCTURAL VALIDATION ---
 
-function validateStructure(node: ViewNode, errors: CheckResult[]) {
-  const ALLOWED_TYPES = ['container', 'text', 'button', 'input', 'header', 'list', 'tabs', 'card'];
+function validateStructure(node: ViewNode, errors: CheckResult[], depth: number = 0) {
+  const ALLOWED_TYPES = [
+      'container', 'text', 'button', 'input', 'header', 'list', 'tabs', 'card', 
+      'element', 'icon', 'chart', 'clock',
+      'file-input', 'slider', 'canvas'
+  ];
   
+  if (depth > MAX_TREE_DEPTH) {
+      errors.push({
+          name: 'Recursion Limit',
+          status: 'FAIL',
+          message: `Maximum component depth exceeded (${depth}).`,
+          evidence: { nodeId: node.id, depth },
+          recommendedFix: 'Flatten the UI structure.'
+      });
+      return; 
+  }
+
   if (!ALLOWED_TYPES.includes(node.type)) {
     errors.push({ 
       name: 'Component Whitelist', 
@@ -22,7 +54,20 @@ function validateStructure(node: ViewNode, errors: CheckResult[]) {
     });
   }
 
-  // Structural check for forbidden opcodes in Event Handlers
+  if (node.type === 'element') {
+      if (!node.tag) {
+          // Default valid
+      } else if (!SAFE_TAGS.includes(node.tag)) {
+          errors.push({
+              name: 'HTML Tag Safety',
+              status: 'FAIL',
+              message: `Forbidden HTML Tag: '${node.tag}'`,
+              evidence: { nodeId: node.id, tag: node.tag },
+              recommendedFix: `Use a safe tag: ${SAFE_TAGS.slice(0, 10).join(', ')}...`
+          });
+      }
+  }
+
   if (node.onClick && OPCODES.some(op => node.onClick!.startsWith(op + ':'))) {
       errors.push({
           name: 'Separation of Concerns',
@@ -34,16 +79,185 @@ function validateStructure(node: ViewNode, errors: CheckResult[]) {
   }
 
   if (node.children) {
-    node.children.forEach(child => validateStructure(child, errors));
+    node.children.forEach(child => validateStructure(child, errors, depth + 1));
   }
 }
 
-// --- PHASE B: SEMANTIC VALIDATION ---
+function validatePipelines(pipelines: Record<string, PipelineDefinition> | undefined, errors: CheckResult[]) {
+    if (!pipelines) return;
 
+    Object.entries(pipelines).forEach(([pid, pipe]) => {
+        // 1. Graph Bomb Check
+        if (pipe.nodes.length > MAX_PIPELINE_NODES) {
+             errors.push({
+                name: `Pipeline Budget (${pid})`,
+                status: 'FAIL',
+                message: `Pipeline exceeds node limit (${pipe.nodes.length} > ${MAX_PIPELINE_NODES}).`,
+                recommendedFix: 'Optimize pipeline or split into sub-tasks.'
+            });
+            return;
+        }
+
+        const nodeMap = new Map<string, PipelineNode>();
+        const nodeIds = new Set<string>();
+        const adjacency: Record<string, string[]> = {};
+
+        pipe.nodes.forEach(n => {
+            if (nodeIds.has(n.id)) {
+                errors.push({
+                    name: `Pipeline Integrity (${pid})`,
+                    status: 'FAIL',
+                    message: `Duplicate Node ID '${n.id}' in pipeline.`,
+                    recommendedFix: 'Ensure all pipeline nodes have unique IDs.'
+                });
+            }
+            nodeIds.add(n.id);
+            nodeMap.set(n.id, n);
+            adjacency[n.id] = [];
+            
+            if (!ALLOWED_OPS.includes(n.op)) {
+                 errors.push({
+                    name: `Op Allowlist (${pid})`,
+                    status: 'FAIL',
+                    message: `Operator '${n.op}' is not authorized.`,
+                    evidence: { nodeId: n.id, op: n.op },
+                    recommendedFix: `Use one of: ${ALLOWED_OPS.join(', ')}`
+                });
+            }
+        });
+
+        // 2. Wiring, Cycle Detection & TYPE CHECKING
+        pipe.nodes.forEach(n => {
+            const opSchema = OPERATOR_REGISTRY[n.op];
+            if (!opSchema) return; // Already flagged as invalid op
+
+            Object.entries(n.inputs).forEach(([idxStr, ref]) => {
+                const inputIdx = parseInt(idxStr);
+                // Input Type Check
+                const expectedInput = opSchema.inputs[inputIdx];
+                if (!expectedInput) {
+                     // Extra input ignored, or warn?
+                     return;
+                }
+
+                if (typeof ref === 'string' && ref.startsWith('@')) {
+                    const targetId = ref.substring(1).split('.')[0];
+                    
+                    if (!nodeIds.has(targetId)) {
+                        errors.push({
+                            name: `Pipeline Wiring (${pid})`,
+                            status: 'FAIL',
+                            message: `Node '${n.id}' references non-existent node '${targetId}'.`,
+                            recommendedFix: 'Check input references.'
+                        });
+                    } else {
+                        // Edge: Target -> Node
+                        adjacency[targetId].push(n.id);
+
+                        // --- STRICT TYPE CHECK ---
+                        const targetNode = nodeMap.get(targetId);
+                        if (targetNode) {
+                            const targetOp = OPERATOR_REGISTRY[targetNode.op];
+                            if (targetOp) {
+                                const outputType = targetOp.output;
+                                const inputType = expectedInput.type;
+                                
+                                // Loose compatibility for 'any' type
+                                const compatible = outputType === inputType || outputType === 'any' || inputType === 'any';
+                                if (!compatible) {
+                                    errors.push({
+                                        name: `Type Safety (${pid})`,
+                                        status: 'FAIL',
+                                        message: `Type Mismatch at '${n.id}' input ${inputIdx}. Expected '${inputType}', got '${outputType}' from '${targetId}'.`,
+                                        evidence: { source: targetId, target: n.id, expected: inputType, actual: outputType },
+                                        recommendedFix: `Connect a compatible node or convert type.`
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    if (targetId === n.id) {
+                         errors.push({
+                            name: `Pipeline Cycle (${pid})`,
+                            status: 'FAIL',
+                            message: `Node '${n.id}' references itself.`,
+                            recommendedFix: 'Remove self-reference.'
+                        });
+                    }
+                } else if (typeof ref === 'string' && ref.startsWith('$')) {
+                    // Context Input Binding Check
+                    const contextKey = ref.substring(1);
+                    const declaredType = pipe.inputs[contextKey];
+                    if (!declaredType) {
+                        errors.push({
+                            name: `Pipeline Interface (${pid})`,
+                            status: 'WARN',
+                            message: `Node '${n.id}' consumes context key '${contextKey}' which is not declared in pipeline 'inputs'.`,
+                            recommendedFix: `Add '${contextKey}' to pipeline.inputs definition.`
+                        });
+                    } else {
+                         // Type check against declared context input
+                         const inputType = expectedInput.type;
+                         const compatible = declaredType === inputType || declaredType === 'any' || inputType === 'any';
+                         if (!compatible) {
+                             errors.push({
+                                name: `Type Safety (${pid})`,
+                                status: 'FAIL',
+                                message: `Type Mismatch at '${n.id}' input ${inputIdx}. Context key '${contextKey}' is '${declaredType}', op expects '${inputType}'.`,
+                            });
+                         }
+                    }
+                }
+            });
+        });
+
+        // 3. Cycle Detection (DFS)
+        const visited = new Set<string>();
+        const recursionStack = new Set<string>();
+
+        function hasCycle(nodeId: string): boolean {
+            if (recursionStack.has(nodeId)) return true;
+            if (visited.has(nodeId)) return false;
+
+            visited.add(nodeId);
+            recursionStack.add(nodeId);
+
+            const neighbors = adjacency[nodeId] || [];
+            for (const neighbor of neighbors) {
+                if (hasCycle(neighbor)) return true;
+            }
+
+            recursionStack.delete(nodeId);
+            return false;
+        }
+
+        // Run DFS from all nodes
+        for (const nodeId of nodeIds) {
+            if (hasCycle(nodeId)) {
+                errors.push({
+                    name: `Pipeline Cycle Detected (${pid})`,
+                    status: 'FAIL',
+                    message: `Cycle detected involving node '${nodeId}'.`,
+                    recommendedFix: 'Pipelines must be Acyclic (DAGs). Break the loop.'
+                });
+                break; // One cycle is enough to fail
+            }
+        }
+        
+        if (pipe.output && !nodeIds.has(pipe.output)) {
+             errors.push({
+                name: `Pipeline Output (${pid})`,
+                status: 'FAIL',
+                message: `Pipeline output references missing node '${pipe.output}'.`,
+            });
+        }
+    });
+}
+
+// ... (Rest of validator.ts checks)
 function validateBindings(node: ViewNode, context: Record<string, any>, results: CheckResult[], isScoped = false) {
-  // Check Text Bindings
   if (node.textBinding) {
-    // Only warn if we are NOT in a scoped context (like a list item)
     if (!isScoped && context[node.textBinding] === undefined) {
       results.push({ 
         name: 'Data Binding', 
@@ -54,9 +268,7 @@ function validateBindings(node: ViewNode, context: Record<string, any>, results:
       });
     }
   }
-  // Check Value Bindings
   if (node.valueBinding) {
-    // Specific check for List components misused with valueBinding
     if (node.type === 'list') {
          results.push({
              name: 'Semantic Convention',
@@ -79,7 +291,6 @@ function validateBindings(node: ViewNode, context: Record<string, any>, results:
   }
   
   if (node.children) {
-    // If current node is a list, its children are templates for items, so they have their own scope.
     const nextIsScoped = isScoped || node.type === 'list';
     node.children.forEach(child => validateBindings(child, context, results, nextIsScoped));
   }
@@ -92,7 +303,6 @@ function validateActionHazards(machine: MachineDefinition, results: CheckResult[
             if (typeof transition === 'string') return;
             if (!transition.actions) return;
             
-            // Check for Reset-Before-Use Hazard
             const resetKeys = new Set<string>();
             transition.actions.forEach((action, index) => {
                 const parts = action.split(':');
@@ -101,7 +311,6 @@ function validateActionHazards(machine: MachineDefinition, results: CheckResult[
                 if (opcode === 'RESET') {
                     resetKeys.add(parts[1]);
                 } else if (opcode === 'APPEND' || opcode === 'SPAWN') {
-                    // APPEND:source:target
                     const source = parts[1];
                     if (resetKeys.has(source)) {
                         results.push({
@@ -118,8 +327,25 @@ function validateActionHazards(machine: MachineDefinition, results: CheckResult[
     });
 }
 
+function validateMachineIntegrity(machine: MachineDefinition, results: CheckResult[]) {
+    Object.entries(machine.states).forEach(([stateName, stateDef]) => {
+        if (!stateDef.on) return;
+        Object.keys(stateDef.on).forEach(eventName => {
+            const potentialOpcode = eventName.split(':')[0];
+            if (OPCODES.includes(potentialOpcode)) {
+                 results.push({
+                    name: 'Protocol Violation',
+                    status: 'FAIL',
+                    message: `Event '${eventName}' in state '${stateName}' appears to be an Action Opcode. Events must be abstract signals (e.g., 'ADD_ITEM'), not direct commands.`,
+                    evidence: { state: stateName, invalidEvent: eventName },
+                    recommendedFix: `Rename '${eventName}' to a semantic event name and move the logic to the 'actions' array.`
+                });
+            }
+        });
+    });
+}
+
 function validateEventWiring(view: ViewNode, machine: MachineDefinition, results: CheckResult[]) {
-    // 1. Collect UI Events
     const uiEvents = new Set<string>();
     const nodeEventMap: Record<string, string> = {};
 
@@ -136,7 +362,6 @@ function validateEventWiring(view: ViewNode, machine: MachineDefinition, results
     }
     traverse(view);
 
-    // 2. Collect Machine Events
     const machineEvents = new Set<string>();
     Object.values(machine.states).forEach(state => {
         if (state.on) {
@@ -144,11 +369,8 @@ function validateEventWiring(view: ViewNode, machine: MachineDefinition, results
         }
     });
 
-    // 3. Compare (UI -> Machine Coverage)
     uiEvents.forEach(evt => {
-        // UPDATE_CONTEXT is a host-level generic event
         if (evt.startsWith('UPDATE_CONTEXT')) return;
-
         if (!machineEvents.has(evt)) {
              results.push({
                 name: 'Event Wiring',
@@ -197,7 +419,6 @@ function validateReachability(machine: any, results: CheckResult[]) {
     }
   }
 
-  // Check for Dead States (Islands)
   const unreachable = [...definedStates].filter(s => !reachable.has(s));
   if (unreachable.length > 0) {
     results.push({ 
@@ -222,7 +443,7 @@ function validateReachability(machine: any, results: CheckResult[]) {
   }
 }
 
-// --- PHASE C: HONESTY CHECKS (Test Vectors) ---
+// --- PHASE C: HONESTY CHECKS ---
 
 function executeTestVectors(proposal: AppDefinition, results: CheckResult[]) {
   if (!proposal.testVectors || proposal.testVectors.length === 0) {
@@ -237,52 +458,57 @@ function executeTestVectors(proposal: AppDefinition, results: CheckResult[]) {
 
   proposal.testVectors.forEach(vector => {
     try {
-      // Lightweight Simulation of Logic Engine
       let currentState = vector.initialState;
       let contextKeysChanged = new Set<string>();
       
-      // Simulate Steps
       for (const step of vector.steps) {
-        
-        // 1. Explicitly Block Actions masquerading as Events
         const opcode = step.event.split(':')[0];
         if (OPCODES.includes(opcode)) {
              throw new Error(`Invalid Vector Event '${step.event}'. Test Vectors must trigger Machine Events (keys in 'states.on'), NOT Action Opcodes.`);
         }
 
-        // Handle System Events (UPDATE_CONTEXT)
         if (step.event.startsWith('UPDATE_CONTEXT')) {
             const parts = step.event.split(':');
             const key = parts[1];
-            if (key) {
-                contextKeysChanged.add(key);
+            if (key) contextKeysChanged.add(key);
+            continue; 
+        }
+
+        if (step.event === 'TICK') {
+            const stateDef = proposal.machine.states[currentState];
+            if (stateDef && stateDef.on && stateDef.on['TICK']) {
+                const trans = stateDef.on['TICK'];
+                const acts = typeof trans === 'string' ? [] : (trans.actions || []);
+                acts.forEach(a => {
+                    if (a.startsWith('ASSIGN:')) contextKeysChanged.add(a.split(':')[1]);
+                });
             }
-            continue; // Skip state check for system events
+            continue;
         }
 
         const stateDef = proposal.machine.states[currentState];
         if (!stateDef || !stateDef.on || !stateDef.on[step.event]) {
-          throw new Error(`State '${currentState}' cannot handle event '${step.event}'. (Hint: Did you use an Action opcode like SET/APPEND instead of a Machine Event?)`);
+          throw new Error(`State '${currentState}' cannot handle event '${step.event}'.`);
         }
         
         const transition = stateDef.on[step.event];
         const target = typeof transition === 'string' ? transition : transition.target;
         const actions = typeof transition === 'string' ? [] : (transition.actions || []);
 
-        // Track Context Mutations (Simulated)
         actions.forEach(act => {
           const type = act.split(':')[0];
           const parts = act.split(':');
            if (type === 'SPAWN' && parts[2]) contextKeysChanged.add(parts[2]);
            if (type === 'APPEND' && parts[2]) contextKeysChanged.add(parts[2]);
            if (type === 'SET' && parts[1]) contextKeysChanged.add(parts[1]);
+           if (type === 'ASSIGN' && parts[1]) contextKeysChanged.add(parts[1]);
            if (type === 'TOGGLE' && parts[1]) contextKeysChanged.add(parts[1]);
+           if (type === 'RUN' && parts[2]) contextKeysChanged.add(parts[2]); // RUN updates context with result
         });
 
         if (target) currentState = target;
       }
 
-      // Verify Expectations
       const lastStep = vector.steps[vector.steps.length - 1];
       if (lastStep.expectState && currentState !== lastStep.expectState) {
         results.push({ 
@@ -300,7 +526,7 @@ function executeTestVectors(proposal: AppDefinition, results: CheckResult[]) {
              status: 'FAIL', 
              message: `Expected context changes in [${missing.join(', ')}] but they were not modified.`,
              evidence: { missingKeys: missing },
-             recommendedFix: `Add actions (SET, TOGGLE, etc) for ${missing.join(', ')} in the transition.`
+             recommendedFix: `Add actions (SET, RUN, etc) for ${missing.join(', ')} in the transition.`
            });
         } else {
            results.push({ name: `Vector: ${vector.name}`, status: 'PASS', message: 'Behavior verified.' });
@@ -315,7 +541,7 @@ function executeTestVectors(proposal: AppDefinition, results: CheckResult[]) {
         status: 'FAIL', 
         message: `Simulation Error: ${e.message}`,
         evidence: { error: e.message },
-        recommendedFix: 'Check event names and state definitions. Do not use Action opcodes as Events.'
+        recommendedFix: 'Check event names and state definitions.'
       });
     }
   });
@@ -335,27 +561,36 @@ export async function verifyProposal(proposal: AppDefinition): Promise<Verificat
     }
   };
 
-  // 1. Structural
-  validateStructure(proposal.view, report.checks.structural);
-  if (report.checks.structural.length === 0) {
-    report.checks.structural.push({ name: 'Schema Integrity', status: 'PASS', message: 'JSON Structure is valid.' });
+  try {
+      // 1. Structural
+      validateStructure(proposal.view, report.checks.structural);
+      validatePipelines(proposal.pipelines, report.checks.structural);
+      
+      if (report.checks.structural.length === 0) {
+        report.checks.structural.push({ name: 'Schema Integrity', status: 'PASS', message: 'JSON Structure is valid.' });
+      }
+
+      // 2. Semantic
+      validateBindings(proposal.view, proposal.initialContext, report.checks.semantic);
+      validateEventWiring(proposal.view, proposal.machine, report.checks.semantic);
+      validateMachineIntegrity(proposal.machine, report.checks.semantic); 
+      validateReachability(proposal.machine, report.checks.semantic);
+      validateActionHazards(proposal.machine, report.checks.semantic);
+
+      // 3. Honesty
+      executeTestVectors(proposal, report.checks.honesty);
+  } catch (e: any) {
+      report.checks.structural.push({
+          name: 'Validator Crash',
+          status: 'FAIL',
+          message: `Validator crashed: ${e.message}`
+      });
   }
 
-  // 2. Semantic
-  validateBindings(proposal.view, proposal.initialContext, report.checks.semantic);
-  validateEventWiring(proposal.view, proposal.machine, report.checks.semantic);
-  validateReachability(proposal.machine, report.checks.semantic);
-  validateActionHazards(proposal.machine, report.checks.semantic);
-
-  // 3. Honesty
-  executeTestVectors(proposal, report.checks.honesty);
-
-  // Score Calculation
   const allChecks = [...report.checks.structural, ...report.checks.semantic, ...report.checks.honesty];
   const fails = allChecks.filter(c => c.status === 'FAIL').length;
   const warns = allChecks.filter(c => c.status === 'WARN').length;
   
-  // Scoring
   let score = 100;
   if (fails > 0) score = 0;
   else score -= (warns * 10);

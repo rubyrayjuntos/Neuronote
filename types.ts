@@ -3,49 +3,131 @@
  */
 
 // 1. View Schema (The UI Structure)
-export type NodeType = 'container' | 'text' | 'button' | 'input' | 'header' | 'list' | 'tabs' | 'card';
+export type NodeType = 
+  | 'container' | 'text' | 'button' | 'input' | 'header' | 'list' | 'tabs' | 'card' 
+  | 'element' | 'icon' | 'chart' | 'clock' 
+  | 'file-input' | 'slider' | 'canvas'; 
 
 export interface ViewNode {
   id: string;
   type: NodeType;
+  tag?: string; 
   props?: Record<string, any>;
   children?: ViewNode[];
-  // Bindings
-  textBinding?: string; // Key in context to bind text content to
-  valueBinding?: string; // Key in context to bind input value to
-  // Event Wiring
-  onClick?: string; // Event name to send to machine
-  onChange?: string; // Event name to send to machine (payload is value)
+  textBinding?: string; 
+  valueBinding?: string; 
+  onClick?: string;
+  onChange?: string;
 }
 
-// 2. Machine Schema (The Logic Flow - Simplified XState-like)
+// 2. Machine Schema (The Logic Flow)
 export interface Transition {
   target?: string;
-  actions?: string[]; // Side-effects: "APPEND:newItem:items", "RESET:newItem"
+  actions?: string[]; 
 }
 
 export interface MachineState {
-  on?: Record<string, string | Transition>; // EventName -> TargetStateName OR Transition Object
-  entry?: string[]; // Actions to run on entry
+  on?: Record<string, string | Transition>; 
+  entry?: string[]; 
 }
 
 export interface MachineDefinition {
   initial: string;
+  pulse?: number; 
   states: Record<string, MachineState>;
 }
 
-// 3. Application Data (Context)
+// 3. Dataflow Schema (The Computation Graph)
+// Layer 2: Dataflow Operators (Pure Semantics)
+export type OperatorType = 
+  // Text
+  | 'Text.ToUpper' | 'Text.RegexMatch' | 'Text.Join' | 'Text.Length'
+  // Math
+  | 'Math.Add' | 'Math.Subtract' | 'Math.Multiply' | 'Math.Divide' | 'Math.Threshold'
+  // Image (OffscreenCanvas)
+  | 'Image.Grayscale' | 'Image.Invert' | 'Image.EdgeDetect' | 'Image.Resize' | 'Image.Threshold'
+  // Audio (OfflineAudioContext)
+  | 'Audio.FFT' | 'Audio.PeakDetect'
+  // Lists & Logic (Control Flow)
+  | 'List.Map' | 'List.Filter' | 'List.Sort' | 'List.Take'
+  | 'Logic.If' | 'Utility.JsonPath';
+
+export type DataType = 'string' | 'number' | 'boolean' | 'json' | 'image' | 'audio' | 'any';
+
+export interface PortSpec {
+  name: string;
+  type: DataType;
+}
+
+export interface OperatorSchema {
+  op: OperatorType;
+  inputs: PortSpec[];
+  output: DataType;
+  description: string;
+  pure: boolean;
+}
+
+export interface PipelineNode {
+  id: string;
+  op: OperatorType;
+  // Inputs: "$contextKey", "@nodeId", or literal value
+  inputs: Record<string, string | number | boolean>; 
+}
+
+export interface PipelineBudget {
+  maxOps: number;     // e.g. 50 nodes
+  maxTimeMs: number;  // e.g. 1000ms
+}
+
+export interface PipelineDefinition {
+  inputs: Record<string, DataType>; // Expected inputs
+  nodes: PipelineNode[];
+  output: string; // The node ID whose output is the result
+  budget?: PipelineBudget;
+}
+
+// Observability & Tracing
+export interface NodeTrace {
+  nodeId: string;
+  op: string;
+  status: 'pending' | 'success' | 'failed' | 'skipped';
+  durationMs: number;
+  outputSummary?: string; // Short summary (e.g. "Image<1024x1024>")
+}
+
+export interface PipelineTrace {
+  pipelineId: string;
+  runId: string;
+  timestamp: number;
+  status: 'success' | 'failed' | 'timeout';
+  totalDurationMs: number;
+  nodeTraces: NodeTrace[];
+  error?: string;
+}
+
+// 4. Application Data (Context)
 export type AppContext = Record<string, any>;
 
-// 4. Verification & Trust
+// 5. App Definition Bundle
+export interface AppDefinition {
+  version: string;
+  view: ViewNode;
+  machine: MachineDefinition;
+  actors?: Record<string, MachineDefinition>;
+  pipelines?: Record<string, PipelineDefinition>; // Registry of tools
+  initialContext: AppContext;
+  testVectors?: TestVector[];
+}
+
+// ... (Rest of types: TestVector, CheckResult, VerificationReport, etc.)
 export interface TestVector {
   name: string;
-  initialState: string; // State to start simulation in
+  initialState: string;
   steps: {
-    event: string;      // Event to fire
-    payload?: any;      // Optional payload
-    expectState?: string; // Expected resulting state
-    expectContextKeys?: string[]; // Keys in context that MUST change
+    event: string;
+    payload?: any;
+    expectState?: string;
+    expectContextKeys?: string[];
   }[];
 }
 
@@ -53,14 +135,14 @@ export interface CheckResult {
   name: string;
   status: 'PASS' | 'FAIL' | 'WARN';
   message: string;
-  evidence?: any; // Machine-readable data about the failure
-  recommendedFix?: string; // AI-readable (or human-readable) hint
+  evidence?: any;
+  recommendedFix?: string;
 }
 
 export interface VerificationReport {
   timestamp: number;
   passed: boolean;
-  score: number; // 0-100 Trust Score
+  score: number;
   checks: {
     structural: CheckResult[];
     semantic: CheckResult[];
@@ -68,54 +150,39 @@ export interface VerificationReport {
   };
 }
 
-// The "AppDefinition" bundle that the AI proposes
-export interface AppDefinition {
-  version: string;
-  view: ViewNode;
-  machine: MachineDefinition; // The Root Machine
-  actors?: Record<string, MachineDefinition>; // Templates for child actors
-  initialContext: AppContext;
-  testVectors?: TestVector[]; // Proof of Behavior
-}
-
-// Telemetry & Logs
 export interface SystemLog {
   id: string;
   timestamp: number;
-  source: 'HOST' | 'GUEST' | 'VALIDATOR' | 'STORAGE';
+  source: 'HOST' | 'GUEST' | 'VALIDATOR' | 'STORAGE' | 'HARNESS';
   type: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
   message: string;
+  payload?: any;
 }
 
-// 9. Observability & Experimentation
 export interface InteractionTrace {
   id: string;
   timestamp: number;
   type: 'click' | 'input' | 'navigation';
-  targetId: string; // The UI node ID
-  event: string;    // The logical event name
+  targetId: string;
+  event: string;
 }
 
 export interface MigrationStats {
   preserved: number;
   dropped: number;
   added: number;
+  ghost: number; 
   details: string;
 }
 
-// The "Change Journal" Entry
 export interface ChangeRecord {
   id: string;
   timestamp: number;
   prompt: string;
   status: 'accepted' | 'rejected' | 'rolled_back';
-  failureReason?: string; // If rolled back or rejected due to crash
-  
-  // Snapshots for Replay/Diffing
+  failureReason?: string;
   oldDef: AppDefinition;
   newDef: AppDefinition;
-  
-  // Flight Recorder Data
   verificationReport: VerificationReport;
   verificationScore: number; 
   diff: {
@@ -129,9 +196,23 @@ export interface ChangeRecord {
 }
 
 export interface SessionMetrics {
-  adoptionRate: number; // % of proposals accepted
-  rollbackRate: number; // % of accepted changes rolled back
-  averageLatency: number; // ms
+  adoptionRate: number; 
+  rollbackRate: number;
+  averageLatency: number; 
   totalInteractions: number;
   experimentCount: number;
+}
+
+export interface EvaluationResult {
+  category: 'SAFETY' | 'LIVENESS' | 'CORRECTNESS';
+  name: string;
+  status: 'PASS' | 'FAIL';
+  latencyMs: number;
+  details: string;
+}
+
+export interface EvaluationSuiteReport {
+  timestamp: number;
+  results: EvaluationResult[];
+  passed: boolean;
 }

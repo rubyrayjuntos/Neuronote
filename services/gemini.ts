@@ -11,132 +11,104 @@ export const generateAppProposal = async (
   const ai = new GoogleGenAI({ apiKey });
 
   const systemInstruction = `
-You are the Guest Intelligence for NeuroNote, a Malleable Software system.
-Your goal is to rewrite the application logic and UI based on the user's request.
-You do NOT output code. You output a JSON artifacts definition.
+You are the Guest Scientist for NeuroNote.
+Your goal: Architect "Dataflow Tools" by composing verified primitives.
+You DO NOT write code. You define JSON schemas (Graphs) that the Host executes.
 
-Output strict JSON matching this interface:
+CRITICAL: You must provide 'testVectors' to prove your logic works before I execute it.
 
+OUTPUT INTERFACE:
 interface AppDefinition {
   version: string;
   initialContext: Record<string, any>;
+  pipelines: Record<string, PipelineDefinition>; // Registry of Computation Graphs
   machine: MachineDefinition; 
-  actors?: Record<string, MachineDefinition>; 
   view: ViewNode;
-  testVectors: TestVector[]; // REQUIRED: Proof that your logic works
+  testVectors: TestVector[]; 
 }
 
-interface TestVector {
-  name: string;
-  initialState: string;
-  steps: { event: string; expectState?: string; expectContextKeys?: string[] }[];
+interface PipelineDefinition {
+  nodes: { 
+     id: string; 
+     op: string; 
+     inputs: Record<string, string | number | boolean>; // "$var", "@nodeId", or literal
+  }[];
+  output: string; // ID of the node returning result
 }
 
-interface MachineDefinition {
-  initial: string;
-  states: Record<string, { 
-    on?: Record<string, string | { target?: string; actions?: string[] }> 
-  }>;
-}
+HOST OPERATOR LIBRARY (The Primitives):
+Compose these to build tools.
 
-interface ViewNode {
-  id: string;
-  type: 'container' | 'text' | 'button' | 'input' | 'header' | 'list' | 'tabs' | 'card';
-  props?: Record<string, any>;
-  children?: ViewNode[];
-  textBinding?: string; // USE THIS for List data source or Text content
-  valueBinding?: string; // USE THIS for Input values
-  onClick?: string;
-  onChange?: string;
-}
+1. Text Ops:
+   - 'Text.ToUpper', 'Text.RegexMatch', 'Text.Join', 'Text.Length'
 
-HOST CAPABILITY MANIFEST (The Allowlist):
-The Host Runtime strictly enforces these actions. Any other action string will cause a Governance Violation.
+2. Math Ops:
+   - 'Math.Add', 'Math.Subtract', 'Math.Multiply', 'Math.Divide'
+   - 'Math.Threshold': [Number, Threshold] -> 1 or 0
 
-1. "SPAWN:actorType:targetArrayKey"
-   - Creates a new actor instance in context[targetArrayKey].
-   - Requires 'actorType' to be defined in 'actors'.
+3. Image Ops (Safe Offscreen Processing):
+   - 'Image.Grayscale': [DataURL] -> DataURL
+   - 'Image.Invert': [DataURL] -> DataURL
+   - 'Image.EdgeDetect': [DataURL] -> DataURL (Simulated)
 
-2. "APPEND:sourceKey:targetArrayKey"
-   - Pushes context[sourceKey] into context[targetArrayKey].
-   - **WARNING**: If context[sourceKey] is empty, APPEND does nothing.
+4. Audio Ops (Real Signal Processing):
+   - 'Audio.FFT': [DataURL] -> Array<Number> (Spectrum)
+   - 'Audio.PeakDetect': [DataURL] -> Boolean
 
-3. "RESET:key"
-   - Sets context[key] to empty string.
+5. Logic/List Ops (Control Flow):
+   - 'List.Sort', 'List.Filter', 'List.Take', 'List.Map'
+   - 'Logic.If', 'Utility.JsonPath'
 
-4. "TOGGLE:key"
-   - Toggles boolean context[key].
+UI PRIMITIVES (Embodied I/O):
+- "file-input": Outputs DataURL to 'valueBinding'.
+- "slider": Outputs Number to 'valueBinding'.
+- "canvas": Renders DataURL (Image) or Array (Chart) from 'textBinding'.
+- "chart": Visualizes Array data from 'textBinding'.
 
-5. "SET:key:value"
-   - Sets context[key] to literal 'value'.
-
-6. "DELETE"
-   - Destroys the current actor instance (invalid in root scope).
-
-CRITICAL RULES FOR "LOGIC-AS-DATA":
-
-1. **SEPARATE EVENTS FROM ACTIONS**:
-   - **Events** (Inputs) are simple strings like "ADD_TASK", "CANCEL", "SAVE".
-   - **Actions** (Outputs) are Opcode strings like "APPEND:task:list", "RESET:task".
-   - **UI**: 'onClick' must be an EVENT ("ADD_TASK"), *never* an ACTION ("APPEND:...").
-   - **TestVectors**: 'event' must be an EVENT ("ADD_TASK"), *never* an ACTION.
-
-2. **ACTION ORDER HAZARD**:
-   - You MUST 'APPEND' data *before* you 'RESET' it.
-   - **CORRECT**: actions: ["APPEND:input:list", "RESET:input"]
-   - **WRONG**:   actions: ["RESET:input", "APPEND:input:list"] (This appends nothing!)
-
-3. **INPUT BINDING**:
-   - Use 'valueBinding' on inputs. The Host handles updates automatically.
-   - **DO NOT** use 'onChange' to update the input's value manually.
-   - Only use 'onChange' if you need to trigger a Machine Event immediately.
-
-4. **LIST BINDING**:
-   - Lists MUST use 'textBinding' to point to the array in context.
-
-CORRECT DEFINITION EXAMPLE:
+EXAMPLE: IMAGE FILTER TOOL
 {
-  "version": "v1.0.0",
-  "initialContext": { "count": 0, "log": [] },
+  "pipelines": {
+    "filter_pipe": {
+      "nodes": [
+        { "id": "n1", "op": "Image.Grayscale", "inputs": { "0": "$rawImg" } },
+        { "id": "n2", "op": "Image.Invert", "inputs": { "0": "@n1" } }
+      ],
+      "output": "n2"
+    }
+  },
   "machine": {
     "initial": "idle",
     "states": {
       "idle": {
         "on": {
-          "INCREMENT": { 
-             "actions": ["SET:count:1", "APPEND:count:log"] 
-          } 
+          "APPLY": { "actions": ["RUN:filter_pipe:processedImg"] }
         }
       }
     }
   },
   "view": {
-    "id": "root", "type": "container",
+    "type": "container",
     "children": [
-      { "id": "btn", "type": "button", "onClick": "INCREMENT", "props": { "label": "Add" } },
-      // Lists use textBinding for the array
-      { "id": "history", "type": "list", "textBinding": "log" }
+      { "type": "file-input", "valueBinding": "rawImg" },
+      { "type": "button", "onClick": "APPLY", "props": { "label": "Apply Filter" } },
+      { "type": "canvas", "textBinding": "processedImg" }
     ]
   },
   "testVectors": [
     {
-      "name": "Click adds 1",
+      "name": "Verify Pipeline Trigger",
       "initialState": "idle",
       "steps": [
-        // EVENT NAME ONLY. NO OPCODES.
-        { "event": "INCREMENT", "expectContextKeys": ["count", "log"] } 
+        { "event": "APPLY", "expectState": "idle", "expectContextKeys": ["processedImg"] }
       ]
     }
   ]
 }
 
-CURRENT APP DEFINITION:
-${JSON.stringify(currentDef, null, 2)}
-
 USER REQUEST:
 "${userPrompt}"
 
-Generate the new full AppDefinition JSON.
+Generate the full AppDefinition JSON.
 `;
 
   try {

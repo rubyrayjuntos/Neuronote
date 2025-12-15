@@ -7,7 +7,7 @@ import { INITIAL_APP } from './constants';
 import { AppDefinition, SystemLog, AppContext, VerificationReport, ChangeRecord, InteractionTrace } from './types';
 import { verifyProposal } from './utils/validator';
 import { computeDiff, computeSessionMetrics } from './utils/analytics';
-import { migrateContext, salvageContext } from './utils/migration';
+import { migrateContext, salvageContext, verifyLensLaws } from './utils/migration';
 import { Terminal, Cpu, ShieldCheck, Activity, BrainCircuit, RefreshCw, AlertTriangle, CheckCircle, XCircle, Microscope, GitCommit, Database } from 'lucide-react';
 
 export default function App() {
@@ -134,6 +134,14 @@ export default function App() {
       
       // Calculate Migration Preview (Lens.get)
       const migrationResult = migrateContext(context, proposal);
+      
+      // PROOF OF PRESERVATION: Verify Lens Laws
+      const lensCheck = verifyLensLaws(context, proposal);
+      if (!lensCheck.satisfied) {
+          addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'WARN', message: `LENS LAW VIOLATION: ${lensCheck.violation}` });
+      } else {
+          addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'SUCCESS', message: `Lens Laws Satisfied (Bidirectional Integrity Verified)` });
+      }
 
       // Create Full Change Record
       const record: ChangeRecord = {

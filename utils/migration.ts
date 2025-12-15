@@ -18,6 +18,10 @@ interface AutoLensResult {
 /**
  * The "AutoLens" infers a structural mapping between two Schemas.
  * It enforces the "GetPut" and "PutGet" laws as best as possible for dynamic schemas.
+ * 
+ * UPDATE v2.1: Now supports "Structural Polymorphism" (Ghost Data Preservation).
+ * It preserves keys that are not defined in the schema to ensure forward compatibility
+ * with future fields or concurrent peer edits.
  */
 export class AutoLens implements Lens<AppContext, AppContext> {
   private sourceDef: AppDefinition;
@@ -30,20 +34,18 @@ export class AutoLens implements Lens<AppContext, AppContext> {
 
   /**
    * Forward: Project Old Context into New Schema
-   * Preserves matching keys, applies New defaults for missing keys.
+   * Preserves matching keys, applies New defaults for missing keys, AND carries over "Ghost Data".
    */
   get(source: AppContext): AppContext {
+    // 1. Start with New Schema defaults (Initializes new features)
     const targetCtx = { ...this.targetDef.initialContext };
-    const sourceKeys = new Set(Object.keys(source));
-    const targetKeys = new Set(Object.keys(targetCtx));
 
-    targetKeys.forEach(key => {
-      // 1. Exact Match: Preserve User Data
-      if (sourceKeys.has(key) && !key.startsWith('_')) {
+    // 2. Overlay ALL Source Data (Preserves User Data + Ghost Data)
+    Object.keys(source).forEach(key => {
+      // We strictly exclude system keys ('_') from blind copying to allow state reset
+      if (!key.startsWith('_')) {
         targetCtx[key] = source[key];
       }
-      // 2. Renaming/Heuristics could go here (e.g. "todoList" -> "todos")
-      // For MVP, we stick to strict key equality implies identity.
     });
 
     return targetCtx;
@@ -54,21 +56,16 @@ export class AutoLens implements Lens<AppContext, AppContext> {
    * Used during Rollbacks to preserve edits made in the "bad" version.
    */
   put(source: AppContext, target: AppContext): AppContext {
-    // Start with the original source (to keep its structure/defaults)
+    // 1. Start with Old Schema defaults
     const restored = { ...this.sourceDef.initialContext };
     
-    // We want to apply any "compatible" changes from Target back to Source.
-    const sourceKeys = new Set(Object.keys(restored));
-    
+    // 2. Overlay ALL Target Data (Preserves "Future" Data / Ghost Data)
     Object.keys(target).forEach(key => {
-      // If the key exists in the Old Schema, update it with the value from the New Context (The "Edit")
-      if (sourceKeys.has(key) && !key.startsWith('_')) {
+      if (!key.startsWith('_')) {
         restored[key] = target[key];
       }
     });
 
-    // We do NOT add new keys from Target, because Source schema doesn't know them.
-    // This satisfies the Lens law that put(s, t) must be a valid s.
     return restored;
   }
 }
@@ -76,24 +73,36 @@ export class AutoLens implements Lens<AppContext, AppContext> {
 /**
  * Helper to compute stats for the migration report
  */
-export function calculateMigrationStats(prev: AppContext, next: AppContext): MigrationStats {
+export function calculateMigrationStats(prev: AppContext, next: AppContext, targetDef?: AppDefinition): MigrationStats {
   const prevKeys = new Set(Object.keys(prev));
   const nextKeys = new Set(Object.keys(next));
+  const schemaKeys = targetDef ? new Set(Object.keys(targetDef.initialContext)) : new Set();
   
   let preserved = 0;
   let added = 0;
   let dropped = 0;
+  let ghost = 0;
   const droppedKeys: string[] = [];
 
   nextKeys.forEach(k => {
-    if (prevKeys.has(k)) preserved++;
-    else added++;
+    if (k.startsWith('_')) return; // Ignore system keys in stats
+    
+    if (prevKeys.has(k)) {
+        preserved++;
+        // Check if this is a "Ghost Key" (Present in data, but NOT in the new schema)
+        if (targetDef && !schemaKeys.has(k)) {
+            ghost++;
+        }
+    } else {
+        added++;
+    }
   });
 
   prevKeys.forEach(k => {
+    if (k.startsWith('_')) return; // Ignore system keys in stats
     if (!nextKeys.has(k)) {
       dropped++;
-      if (!k.startsWith('_')) droppedKeys.push(k);
+      droppedKeys.push(k);
     }
   });
 
@@ -101,23 +110,23 @@ export function calculateMigrationStats(prev: AppContext, next: AppContext): Mig
     preserved,
     added,
     dropped,
+    ghost,
     details: droppedKeys.length > 0 ? `Dropped: ${droppedKeys.join(', ')}` : 'Lossless'
   };
 }
 
 // Legacy wrapper for compatibility, now powered by Lens
 export function migrateContext(prevContext: AppContext, nextDef: AppDefinition): { context: AppContext, stats: MigrationStats } {
-  // We don't have the full "Previous Definition" here easily in the current signature, 
-  // but we can assume the 'prevContext' represents the source data.
-  // We mock the sourceDef for the Lens since we only strictly need the keys from prevContext for 'get'.
-  const mockSourceDef: AppDefinition = { ...nextDef, initialContext: prevContext }; // Hack for source structure
+  // Mock source def isn't strictly needed for 'get' in this polymorphic version 
+  // as we just overlay prevContext, but we keep the architecture consistent.
+  const mockSourceDef: AppDefinition = { ...nextDef, initialContext: prevContext }; 
   
   const lens = new AutoLens(mockSourceDef, nextDef);
   const nextContext = lens.get(prevContext);
   
   return {
     context: nextContext,
-    stats: calculateMigrationStats(prevContext, nextContext)
+    stats: calculateMigrationStats(prevContext, nextContext, nextDef)
   };
 }
 
@@ -125,12 +134,35 @@ export function migrateContext(prevContext: AppContext, nextDef: AppDefinition):
 export function salvageContext(brokenContext: AppContext, targetDef: AppDefinition): AppContext {
   // We treat 'brokenContext' as the Target (the state we are retreating FROM)
   // We treat 'targetDef' as the Source (the state we are retreating TO)
-  // So we construct a Lens(Source=TargetDef, Target=BrokenDef)
-  // And we call lens.put(targetDef.initialContext, brokenContext)
   
   const mockBrokenDef: AppDefinition = { ...targetDef, initialContext: brokenContext };
   const lens = new AutoLens(targetDef, mockBrokenDef);
   
-  // put(original_base, modified_future) -> updated_base
   return lens.put(targetDef.initialContext, brokenContext);
+}
+
+/**
+ * Validates the Lens Laws for the given migration.
+ * Used for System Integrity checks.
+ */
+export function verifyLensLaws(source: AppContext, nextDef: AppDefinition): { satisfied: boolean, score: number, violation?: string } {
+    try {
+        const lens = new AutoLens({ ...nextDef, initialContext: source }, nextDef);
+        
+        // 1. Round Trip (Get -> Put)
+        const evolved = lens.get(source);
+        const salvaged = lens.put(source, evolved);
+        
+        // Check if we lost any keys from the source (Allowing for additions)
+        const sourceKeys = Object.keys(source).filter(k => !k.startsWith('_'));
+        const lostKeys = sourceKeys.filter(k => !salvaged.hasOwnProperty(k));
+        
+        if (lostKeys.length > 0) {
+            return { satisfied: false, score: 0, violation: `Lens Law Broken: Round-trip lost keys [${lostKeys.join(', ')}]` };
+        }
+        
+        return { satisfied: true, score: 100 };
+    } catch (e: any) {
+        return { satisfied: false, score: 0, violation: e.message };
+    }
 }

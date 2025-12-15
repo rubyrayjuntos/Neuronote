@@ -1,4 +1,4 @@
-import { AppDefinition, AppContext } from "../types";
+import { AppDefinition, AppContext, PipelineDefinition, PipelineTrace, NodeTrace } from "../types";
 
 /**
  * THE LOGIC KERNEL (Guest Code)
@@ -7,6 +7,7 @@ import { AppDefinition, AppContext } from "../types";
 const KERNEL_SOURCE = `
 let context = {};
 let definition = {};
+let pendingTasks = []; // Queue for Tier 2 tasks
 
 // --- KERNEL BOOT ---
 globalThis.boot = function(initialContext, def) {
@@ -34,7 +35,6 @@ function resolveActor(scopeId) {
         type: null
       };
     }
-    
     const type = context._sys.actorTypes ? context._sys.actorTypes[scopeId] : null;
     const def = (definition.actors && type) ? definition.actors[type] : null;
     const state = context._sys.actorStates ? context._sys.actorStates[scopeId] : null;
@@ -45,7 +45,6 @@ function resolveActor(scopeId) {
 }
 
 // --- CAPABILITY MANIFEST (The Governance Layer) ---
-// This defines the strict Allowlist of actions the Guest Logic can invoke.
 const CAPABILITY_MANIFEST = {
     SPAWN: {
         minArgs: 2,
@@ -53,14 +52,10 @@ const CAPABILITY_MANIFEST = {
              const actorType = args[0];
              const listKey = args[1];
              if (!definition.actors || !definition.actors[actorType]) throw new Error("Security: Unknown Actor Type '" + actorType + "'");
-             
              const newId = 'actor_' + Math.random().toString(36).substr(2, 9);
              const data = getScopedData();
              const list = Array.isArray(data[listKey]) ? data[listKey] : [];
-             
              setScopedData({ [listKey]: [...list, newId] });
-             
-             // Initialize System State for Actor
              context._sys.actorStates[newId] = definition.actors[actorType].initial;
              context._sys.actorTypes[newId] = actorType;
              if (!context.actors) context.actors = {};
@@ -74,8 +69,7 @@ const CAPABILITY_MANIFEST = {
             const tgt = args[1];
             const data = getScopedData();
             const val = data[src];
-            if (!val && val !== 0 && val !== false) return; // Strict truthy check (allow 0/false?) - adjusted to allow 0
-            
+            if (!val && val !== 0 && val !== false) return; 
             const list = Array.isArray(data[tgt]) ? data[tgt] : [];
             setScopedData({ [tgt]: [...list, val] });
         }
@@ -91,8 +85,15 @@ const CAPABILITY_MANIFEST = {
         minArgs: 2,
         exec: (args, { setScopedData }) => {
             const key = args[0];
-            const val = args[1]; // Value is passed as string from split, but typically primitive in this simplified VM
+            const val = args[1];
             setScopedData({ [key]: val });
+        }
+    },
+    ASSIGN: {
+        minArgs: 1,
+        exec: (args, { setScopedData, payload }) => {
+            const key = args[0];
+            setScopedData({ [key]: payload });
         }
     },
     TOGGLE: {
@@ -108,30 +109,28 @@ const CAPABILITY_MANIFEST = {
         exec: (args, { scopeId }) => {
             if (scopeId === 'root') throw new Error("Security: Cannot DELETE root");
             delete context._sys.actorStates[scopeId];
-            // We leave the data in actors map for now, or could clean it up.
-            // But we must remove it from the parent list? 
-            // The current simple implementation doesn't track parent-child relationships easily for list removal.
-            // For MVP, we effectively 'kill' the actor state.
+        }
+    },
+    // NEW: TIER 2 SCHEDULING
+    RUN: {
+        minArgs: 2,
+        exec: (args, { scopeId }) => {
+            const pipelineId = args[0];
+            const targetKey = args[1];
+            // Push to scheduler queue
+            pendingTasks.push({ pipelineId, targetKey, scopeId });
         }
     }
 };
 
 // --- HELPER: EXECUTE ACTION ---
-function executeAction(actionString, scopeId) {
+function executeAction(actionString, scopeId, payload) {
     const parts = actionString.split(':');
     const opcode = parts[0];
     const args = parts.slice(1);
-    
-    // 1. Manifest Check
     const capability = CAPABILITY_MANIFEST[opcode];
-    if (!capability) {
-        throw new Error("GOVERNANCE VIOLATION: Illegal Opcode '" + opcode + "'. Action rejected.");
-    }
-    
-    // 2. Arg Validation
-    if (args.length < capability.minArgs) {
-        throw new Error("GOVERNANCE VIOLATION: Invalid arguments for '" + opcode + "'. Expected " + capability.minArgs);
-    }
+    if (!capability) throw new Error("GOVERNANCE VIOLATION: Illegal Opcode '" + opcode + "'");
+    if (args.length < capability.minArgs) throw new Error("GOVERNANCE VIOLATION: Invalid arguments for '" + opcode + "'");
 
     const getScopedData = () => scopeId === 'root' ? context : (context.actors[scopeId] || {});
     const setScopedData = (newData) => {
@@ -144,66 +143,57 @@ function executeAction(actionString, scopeId) {
         }
     };
 
-    // 3. Execution
-    capability.exec(args, { setScopedData, getScopedData, scopeId });
+    capability.exec(args, { setScopedData, getScopedData, scopeId, payload });
 }
 
 // --- DISPATCHER ---
 globalThis.dispatch = function(event, payload, scopeId) {
     if (!scopeId) scopeId = 'root';
+    pendingTasks = []; // Reset queue
 
     if (event.startsWith('UPDATE_CONTEXT')) {
         const key = event.split(':')[1];
-        if (scopeId === 'root') {
-            context[key] = payload;
-        } else {
+        if (scopeId === 'root') context[key] = payload;
+        else {
             if (!context.actors) context.actors = {};
             if (!context.actors[scopeId]) context.actors[scopeId] = {};
             context.actors[scopeId][key] = payload;
         }
-        return context;
+        return { context, tasks: [] };
     }
 
     const actor = resolveActor(scopeId);
-    if (!actor) return context;
+    if (!actor) return { context, tasks: [] };
     
     const { def, state } = actor;
     const machineState = def.states[state];
-    if (!machineState) return context;
+    if (!machineState) return { context, tasks: [] };
     
     const transitionDef = machineState.on ? machineState.on[event] : null;
     
     if (transitionDef) {
         let target = undefined;
         let actions = [];
-        
         if (typeof transitionDef === 'string') {
             target = transitionDef;
         } else {
             target = transitionDef.target;
             actions = transitionDef.actions || [];
         }
-        
-        // Execute all side effects through the Governance Layer
-        actions.forEach(act => executeAction(act, scopeId));
-        
+        actions.forEach(act => executeAction(act, scopeId, payload));
         if (target) {
-            if (scopeId === 'root') {
-                context._sys.rootState = target;
-            } else {
-                context._sys.actorStates[scopeId] = target;
-            }
+            if (scopeId === 'root') context._sys.rootState = target;
+            else context._sys.actorStates[scopeId] = target;
         }
     }
     
-    return context;
+    return { context, tasks: pendingTasks };
 };
 `;
 
 /**
  * THE WORKER BLOB
- * This code runs in the Web Worker thread.
- * It loads QuickJS from CDN and manages the VM.
+ * Contains QuickJS VM + Dataflow Engine (Tier 2)
  */
 const WORKER_BLOB = `
 import { getQuickJS } from "https://esm.sh/quickjs-emscripten@0.29.0";
@@ -213,12 +203,318 @@ const KERNEL_SOURCE = ${JSON.stringify(KERNEL_SOURCE)};
 let runtime = null;
 let vm = null;
 let module = null;
+let globalContext = null; // Cache for native use
+let globalDef = null;
+
+// --- TIER 2: DATAFLOW ENGINE (NATIVE JS) ---
+// This runs in the Worker.
+
+// Helper: Async Image Processor using OffscreenCanvas
+async function processImage(dataUrl, effect) {
+    if (!dataUrl || !dataUrl.startsWith('data:image')) return dataUrl;
+    
+    try {
+        const blob = await (await fetch(dataUrl)).blob();
+        const bitmap = await createImageBitmap(blob);
+        const width = bitmap.width;
+        const height = bitmap.height;
+        
+        const canvas = new OffscreenCanvas(width, height);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(bitmap, 0, 0);
+        const imageData = ctx.getImageData(0, 0, width, height);
+        const data = imageData.data;
+
+        if (effect === 'grayscale') {
+            for (let i = 0; i < data.length; i += 4) {
+                const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                data[i] = avg;
+                data[i + 1] = avg;
+                data[i + 2] = avg;
+            }
+        } else if (effect === 'invert') {
+             for (let i = 0; i < data.length; i += 4) {
+                data[i] = 255 - data[i];
+                data[i + 1] = 255 - data[i + 1];
+                data[i + 2] = 255 - data[i + 2];
+            }
+        } else if (effect === 'threshold') {
+             for (let i = 0; i < data.length; i += 4) {
+                const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                const v = avg > 128 ? 255 : 0;
+                data[i] = v;
+                data[i + 1] = v;
+                data[i + 2] = v;
+             }
+        } else if (effect === 'edge') {
+            // Simple Edge Detection (High Pass)
+            for (let i = 0; i < data.length; i += 4) {
+               const r = Math.abs(data[i] - (data[i+4] || data[i]));
+               const val = r > 20 ? 255 : 0;
+               data[i] = val;
+               data[i+1] = val;
+               data[i+2] = val;
+            }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        const blobOut = await canvas.convertToBlob();
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.readAsDataURL(blobOut);
+        });
+    } catch (e) {
+        console.warn("Image Processing Failed", e);
+        return dataUrl; 
+    }
+}
+
+// Helper: Perform FFT on Audio Data
+async function processAudio(dataUrl, effect) {
+    if (!dataUrl || !dataUrl.startsWith('data:audio')) return [];
+    
+    try {
+        const resp = await fetch(dataUrl);
+        const arrayBuffer = await resp.arrayBuffer();
+        
+        // Use OfflineAudioContext to decode (Standard Web Audio API)
+        const ctx = new OfflineAudioContext(1, 1, 44100);
+        const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+        const rawData = audioBuffer.getChannelData(0);
+        
+        if (effect === 'fft') {
+            return performRealFFT(rawData, 64);
+        } else if (effect === 'peak') {
+            let max = 0;
+            for(let i=0; i<rawData.length; i++) {
+                if(Math.abs(rawData[i]) > max) max = Math.abs(rawData[i]);
+            }
+            return max > 0.5;
+        }
+        return [];
+    } catch (e) {
+        console.warn("Audio Processing Failed", e);
+        return [];
+    }
+}
+
+function performRealFFT(waveform, bins) {
+    const result = new Array(bins).fill(0);
+    const step = Math.floor(waveform.length / bins);
+    
+    for (let i = 0; i < bins; i++) {
+        let sum = 0;
+        for (let j = 0; j < step; j++) {
+            const idx = i * step + j;
+            if (idx < waveform.length) {
+                sum += Math.abs(waveform[idx]);
+            }
+        }
+        result[i] = (sum / step) * 100; // Normalized amplitude
+    }
+    return result;
+}
+
+const OPERATORS = {
+    // TEXT OPS
+    'Text.ToUpper': (inputs) => (String(inputs[0] || '')).toUpperCase(),
+    'Text.Length': (inputs) => (String(inputs[0] || '').length),
+    'Text.RegexMatch': (inputs) => {
+        const str = String(inputs[0] || '');
+        const pattern = String(inputs[1] || '');
+        const match = str.match(new RegExp(pattern));
+        return match ? match[0] : '';
+    },
+    'Text.Join': (inputs) => {
+        const arr = Array.isArray(inputs[0]) ? inputs[0] : [inputs[0]];
+        return arr.join(inputs[1] || ', ');
+    },
+    
+    // MATH OPS
+    'Math.Add': (inputs) => Number(inputs[0]) + Number(inputs[1]),
+    'Math.Subtract': (inputs) => Number(inputs[0]) - Number(inputs[1]),
+    'Math.Multiply': (inputs) => Number(inputs[0]) * Number(inputs[1]),
+    'Math.Divide': (inputs) => Number(inputs[0]) / (Number(inputs[1]) || 1),
+    'Math.Threshold': (inputs) => Number(inputs[0]) > Number(inputs[1]) ? 1 : 0,
+
+    // LOGIC
+    'Logic.If': (inputs) => inputs[0] ? inputs[1] : inputs[2],
+    'Utility.JsonPath': (inputs) => {
+        const obj = inputs[0];
+        const path = String(inputs[1] || '');
+        return path.split('.').reduce((o, k) => (o || {})[k], obj);
+    },
+
+    // LIST OPS
+    'List.Map': (inputs) => {
+         const arr = Array.isArray(inputs[0]) ? inputs[0] : [];
+         return arr.map(x => String(x));
+    },
+    'List.Filter': (inputs) => {
+         const arr = Array.isArray(inputs[0]) ? inputs[0] : [];
+         return arr.filter(x => !!x);
+    },
+    'List.Sort': (inputs) => {
+         const arr = Array.isArray(inputs[0]) ? [...inputs[0]] : [];
+         return arr.sort();
+    },
+    'List.Take': (inputs) => {
+        const arr = Array.isArray(inputs[0]) ? inputs[0] : [];
+        const n = Number(inputs[1]) || 0;
+        return arr.slice(0, n);
+    },
+
+    // IMAGE OPS (Async)
+    'Image.Grayscale': async (inputs) => processImage(inputs[0], 'grayscale'),
+    'Image.Invert': async (inputs) => processImage(inputs[0], 'invert'),
+    'Image.EdgeDetect': async (inputs) => processImage(inputs[0], 'edge'),
+    'Image.Resize': async (inputs) => processImage(inputs[0], 'resize'),
+    'Image.Threshold': async (inputs) => processImage(inputs[0], 'threshold'),
+
+    // AUDIO OPS (Real)
+    'Audio.FFT': async (inputs) => processAudio(inputs[0], 'fft'),
+    'Audio.PeakDetect': async (inputs) => processAudio(inputs[0], 'peak')
+};
+
+// Topological Sort (Kahn's Algorithm)
+function getExecutionOrder(nodes) {
+    const adj = {};
+    const inDegree = {};
+    const nodeMap = {};
+    
+    nodes.forEach(n => {
+        adj[n.id] = [];
+        inDegree[n.id] = 0;
+        nodeMap[n.id] = n;
+    });
+    
+    nodes.forEach(n => {
+        Object.values(n.inputs).forEach(ref => {
+            if (typeof ref === 'string' && ref.startsWith('@')) {
+                const targetId = ref.substring(1).split('.')[0];
+                if (adj[targetId]) {
+                    adj[targetId].push(n.id);
+                    inDegree[n.id]++;
+                }
+            }
+        });
+    });
+    
+    const queue = nodes.filter(n => inDegree[n.id] === 0).map(n => n.id);
+    const order = [];
+    
+    while(queue.length > 0) {
+        const u = queue.shift();
+        order.push(nodeMap[u]);
+        
+        adj[u].forEach(v => {
+            inDegree[v]--;
+            if (inDegree[v] === 0) queue.push(v);
+        });
+    }
+    
+    if (order.length !== nodes.length) throw new Error("Cycle detected in pipeline (Runtime Check)");
+    return order;
+}
+
+async function executePipeline(pipeId, scopeId) {
+    const startTime = performance.now();
+    const trace = {
+        pipelineId: pipeId,
+        runId: Math.random().toString(36).substring(7),
+        timestamp: Date.now(),
+        status: 'success',
+        totalDurationMs: 0,
+        nodeTraces: [],
+        error: undefined
+    };
+
+    if (!globalDef.pipelines || !globalDef.pipelines[pipeId]) {
+        throw new Error("Pipeline not found: " + pipeId);
+    }
+    const pipe = globalDef.pipelines[pipeId];
+    const nodeResults = {};
+
+    function resolveInput(ref) {
+        if (typeof ref === 'string' && ref.startsWith('$')) {
+            const key = ref.substring(1);
+            if (scopeId === 'root') return globalContext[key];
+            else return globalContext.actors?.[scopeId]?.[key];
+        }
+        if (typeof ref === 'string' && ref.startsWith('@')) {
+            const [nodeId, port] = ref.substring(1).split('.');
+            return nodeResults[nodeId];
+        }
+        return ref; 
+    }
+
+    try {
+        const sortedNodes = getExecutionOrder(pipe.nodes);
+        const maxTime = pipe.budget?.maxTimeMs || 1000;
+
+        for (const node of sortedNodes) {
+            // Strict Budget Check
+            if (performance.now() - startTime > maxTime) {
+                trace.status = 'timeout';
+                throw new Error("Pipeline exceeded runtime budget of " + maxTime + "ms");
+            }
+
+            const nodeStart = performance.now();
+            const inputs = Object.values(node.inputs).map(resolveInput);
+            const op = OPERATORS[node.op];
+            
+            if (!op) throw new Error("Unknown Op: " + node.op);
+            
+            try {
+                // Execute Op
+                const result = await op(inputs);
+                nodeResults[node.id] = result;
+
+                // Trace Success
+                let summary = typeof result;
+                if (typeof result === 'string' && result.length > 50) summary = 'string<' + result.length + '>';
+                if (Array.isArray(result)) summary = 'array<' + result.length + '>';
+
+                trace.nodeTraces.push({
+                    nodeId: node.id,
+                    op: node.op,
+                    status: 'success',
+                    durationMs: performance.now() - nodeStart,
+                    outputSummary: summary
+                });
+
+            } catch (e) {
+                trace.nodeTraces.push({
+                    nodeId: node.id,
+                    op: node.op,
+                    status: 'failed',
+                    durationMs: performance.now() - nodeStart
+                });
+                throw e;
+            }
+        }
+
+        trace.totalDurationMs = performance.now() - startTime;
+        let output = null;
+        if (pipe.output) output = nodeResults[pipe.output];
+        
+        return { output, trace };
+
+    } catch (e) {
+        trace.status = 'failed';
+        trace.error = e.message;
+        trace.totalDurationMs = performance.now() - startTime;
+        return { output: null, trace };
+    }
+}
+
+// ------------------------------------------
 
 // GOVERNANCE CONFIG
-const MAX_INSTRUCTIONS = 100000; // Fuel Limit
+const MAX_INSTRUCTIONS = 100000; 
 let instructionCount = 0;
 
-// Helper: Marshalling
 function marshallJSON(ctx, json) {
     const jsonParse = ctx.unwrapResult(ctx.evalCode("JSON.parse"));
     const strHandle = ctx.newString(JSON.stringify(json));
@@ -232,9 +528,7 @@ self.onmessage = async (e) => {
   const { type, payload, id } = e.data;
 
   try {
-    if (!module) {
-        module = await getQuickJS();
-    }
+    if (!module) module = await getQuickJS();
 
     if (type === 'BOOT') {
        if (runtime) {
@@ -242,23 +536,17 @@ self.onmessage = async (e) => {
            runtime.dispose();
        }
        
-       // 8.4 RESOURCE GOVERNANCE: Memory Budget (16MB)
        runtime = module.newRuntime();
-       runtime.setMemoryLimit(1024 * 1024 * 16);
+       runtime.setMemoryLimit(1024 * 1024 * 32);
        
-       // 8.5 RESOURCE GOVERNANCE: Deterministic Instruction Metering
        instructionCount = 0;
        runtime.setInterruptHandler(() => {
            instructionCount++;
-           if (instructionCount > MAX_INSTRUCTIONS) {
-               return true; // Interrupt execution
-           }
+           if (instructionCount > MAX_INSTRUCTIONS) return true;
            return false;
        });
        
        vm = runtime.newContext();
-       
-       // Load Kernel Logic
        const evalRes = vm.evalCode(KERNEL_SOURCE);
        if (evalRes.error) {
            const err = vm.dump(evalRes.error);
@@ -267,27 +555,21 @@ self.onmessage = async (e) => {
        }
        evalRes.value.dispose();
        
-       // Boot
        const { context, definition } = payload;
+       globalContext = context; // Store for Tier 2
+       globalDef = definition;
+
        const fnBoot = vm.getProp(vm.global, "boot");
        const hCtx = marshallJSON(vm, context);
        const hDef = marshallJSON(vm, definition);
        
-       // Reset Fuel for Boot
        instructionCount = 0;
-       
        const res = vm.callFunction(fnBoot, vm.undefined, hCtx, hDef);
-       
-       hCtx.dispose();
-       hDef.dispose();
-       fnBoot.dispose();
+       hCtx.dispose(); hDef.dispose(); fnBoot.dispose();
        
        if (res.error) {
            const err = vm.dump(res.error);
            res.error.dispose();
-           if (instructionCount > MAX_INSTRUCTIONS) {
-               throw new Error("GOVERNANCE: Boot exceeded fuel limit (" + MAX_INSTRUCTIONS + " ops)");
-           }
            throw new Error("Boot Failed: " + JSON.stringify(err));
        }
        res.value.dispose();
@@ -305,29 +587,56 @@ self.onmessage = async (e) => {
        const hPayload = marshallJSON(vm, data === undefined ? null : data);
        const hScope = vm.newString(scopeId || 'root');
        
-       // Reset Fuel for Dispatch
        instructionCount = 0;
-       
        const res = vm.callFunction(fnDispatch, vm.undefined, hEvent, hPayload, hScope);
        
-       hEvent.dispose();
-       hPayload.dispose();
-       hScope.dispose();
-       fnDispatch.dispose();
+       hEvent.dispose(); hPayload.dispose(); hScope.dispose(); fnDispatch.dispose();
        
        if (res.error) {
            const err = vm.dump(res.error);
            res.error.dispose();
-           if (instructionCount > MAX_INSTRUCTIONS) {
-               throw new Error("GOVERNANCE: Dispatch exceeded fuel limit (" + MAX_INSTRUCTIONS + " ops)");
-           }
+           if (instructionCount > MAX_INSTRUCTIONS) throw new Error("Governance: Fuel Limit");
            throw new Error("Dispatch Error: " + JSON.stringify(err));
        }
        
-       const newContext = vm.dump(res.value);
+       const resultObj = vm.dump(res.value); // { context, tasks }
        res.value.dispose();
-       
-       self.postMessage({ type: 'SUCCESS', id, payload: newContext });
+
+       globalContext = resultObj.context;
+       const tasks = resultObj.tasks || [];
+       const traces = [];
+
+       // --- TIER 2 EXECUTION ---
+       // If QuickJS returned tasks, execute them in Native Worker
+       if (tasks.length > 0) {
+           for (const task of tasks) {
+               const { output, trace } = await executePipeline(task.pipelineId, task.scopeId);
+               traces.push(trace);
+               
+               if (trace.status === 'success') {
+                   // Merge Result
+                   if (task.scopeId === 'root') {
+                       globalContext[task.targetKey] = output;
+                   } else {
+                       globalContext.actors[task.scopeId][task.targetKey] = output;
+                   }
+               }
+           }
+       }
+
+       self.postMessage({ type: 'SUCCESS', id, payload: { context: globalContext, traces } });
+    }
+
+    if (type === 'TEST_HANG') {
+       if (!vm) throw new Error("VM Not Booted");
+       instructionCount = 0;
+       const res = vm.evalCode("while(true) {}");
+       if (res.error) {
+           res.error.dispose();
+           throw new Error("GOVERNANCE: Loop terminated by Fuel Limit.");
+       }
+       res.value.dispose();
+       self.postMessage({ type: 'SUCCESS', id });
     }
     
   } catch (err) {
@@ -338,7 +647,6 @@ self.onmessage = async (e) => {
 
 /**
  * HOST KERNEL PROXY
- * Manages the Worker lifecycle and enforces time budgets.
  */
 export class WasmKernel {
   private worker: Worker | null = null;
@@ -346,8 +654,6 @@ export class WasmKernel {
 
   async init(context: AppContext, definition: AppDefinition) {
     this.dispose();
-
-    // Create Worker from Blob
     const blob = new Blob([WORKER_BLOB], { type: "application/javascript" });
     const url = URL.createObjectURL(blob);
     this.worker = new Worker(url, { type: "module" });
@@ -361,27 +667,25 @@ export class WasmKernel {
             else resolve(payload);
         }
     };
-
-    // Boot with Time Limit (Fallback for Fuel)
-    return this.send('BOOT', { context, definition }, 5000); 
+    return this.send('BOOT', { context, definition }, 20000); 
   }
 
-  async dispatch(event: string, payload: any, scopeId: string = 'root'): Promise<AppContext> {
-      // 8.4 RESOURCE GOVERNANCE: Time Budget (Fallback)
-      return this.send('DISPATCH', { event, data: payload, scopeId }, 500) as Promise<AppContext>;
+  async dispatch(event: string, payload: any, scopeId: string = 'root'): Promise<{context: AppContext, traces?: PipelineTrace[]}> {
+      return this.send('DISPATCH', { event, data: payload, scopeId }, 1000) as Promise<{context: AppContext, traces?: PipelineTrace[]}>;
+  }
+
+  async forceHang(): Promise<void> {
+      return this.send('TEST_HANG', {}, 2000) as Promise<void>;
   }
 
   private send(type: string, payload: any, timeoutMs: number) {
       return new Promise((resolve, reject) => {
           if (!this.worker) return reject(new Error("Worker terminated"));
-          
           const id = Math.random().toString(36).slice(2);
-          
-          // Governance: Wall-clock Timeout (Backstop)
           const timer = setTimeout(() => {
               if (this.pending.has(id)) {
                   this.pending.delete(id);
-                  this.terminate(); // Kill the offender
+                  this.terminate(); 
                   reject(new Error(`GOVERNANCE: Wall-clock timeout (> ${timeoutMs}ms). Worker terminated.`));
               }
           }, timeoutMs);
@@ -390,7 +694,6 @@ export class WasmKernel {
               resolve: (val: any) => { clearTimeout(timer); resolve(val); },
               reject: (err: any) => { clearTimeout(timer); reject(err); }
           });
-          
           this.worker.postMessage({ type, payload, id });
       });
   }
