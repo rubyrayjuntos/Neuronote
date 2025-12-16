@@ -232,9 +232,16 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
       case 'container': return <div {...commonProps}>{childrenContent}</div>;
       case 'card': return <div {...commonProps} className={`bg-zinc-900 border border-zinc-800 rounded-xl p-4 shadow-sm ${props.className || ''}`}>{childrenContent}</div>;
       case 'header': return <h1 {...commonProps}>{childrenContent}</h1>;
-      case 'text': return (state === 'editing' && textBinding) ? <textarea {...commonProps} value={data[textBinding] || ''} onChange={(e) => sendEvent(`UPDATE_CONTEXT:${textBinding}`, e.target.value, scopeId)} /> : <div {...commonProps}>{childrenContent}</div>;
+      
+      case 'text':
+      case 'text-display': // Map text-display to text (handles textarea/div)
+           return (state === 'editing' && textBinding) ? <textarea {...commonProps} value={data[textBinding] || ''} onChange={(e) => sendEvent(`UPDATE_CONTEXT:${textBinding}`, e.target.value, scopeId)} /> : <div {...commonProps}>{childrenContent}</div>;
+      
       case 'button': return <button {...commonProps} onClick={handleClick}>{props.label || childrenContent || 'Button'}</button>;
-      case 'input': return <input {...commonProps} value={valueBinding ? (data[valueBinding] || '') : undefined} onChange={handleInput} />;
+      
+      case 'input': 
+      case 'text-input': // Map text-input to input
+           return <input {...commonProps} value={valueBinding ? (data[valueBinding] || '') : undefined} onChange={handleInput} />;
       
       case 'element': { const Tag = (node.tag || 'div') as any; return <Tag {...commonProps} onClick={handleClick}>{childrenContent}</Tag>; }
       case 'icon': { const IconComp = (Icons as any)[props.name || 'HelpCircle'] || Icons.HelpCircle; return <IconComp {...commonProps} onClick={handleClick} />; }

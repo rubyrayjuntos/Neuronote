@@ -6,7 +6,8 @@
 export type NodeType = 
   | 'container' | 'text' | 'button' | 'input' | 'header' | 'list' | 'tabs' | 'card' 
   | 'element' | 'icon' | 'chart' | 'clock' 
-  | 'file-input' | 'slider' | 'canvas'; 
+  | 'file-input' | 'slider' | 'canvas'
+  | 'text-input' | 'text-display'; 
 
 export interface ViewNode {
   id: string;
@@ -171,7 +172,8 @@ export interface MigrationStats {
   preserved: number;
   dropped: number;
   added: number;
-  ghost: number; 
+  ghost: number;
+  ghostKeys?: string[]; 
   details: string;
 }
 

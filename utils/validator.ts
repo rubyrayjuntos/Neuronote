@@ -30,7 +30,8 @@ function validateStructure(node: ViewNode, errors: CheckResult[], depth: number 
   const ALLOWED_TYPES = [
       'container', 'text', 'button', 'input', 'header', 'list', 'tabs', 'card', 
       'element', 'icon', 'chart', 'clock',
-      'file-input', 'slider', 'canvas'
+      'file-input', 'slider', 'canvas',
+      'text-input', 'text-display'
   ];
   
   if (depth > MAX_TREE_DEPTH) {
@@ -257,8 +258,11 @@ function validatePipelines(pipelines: Record<string, PipelineDefinition> | undef
 
 // ... (Rest of validator.ts checks)
 function validateBindings(node: ViewNode, context: Record<string, any>, results: CheckResult[], isScoped = false) {
+  // CRITICAL FIX: Guard against undefined context to prevent crash on property access
+  const ctx = context || {};
+
   if (node.textBinding) {
-    if (!isScoped && context[node.textBinding] === undefined) {
+    if (!isScoped && ctx[node.textBinding] === undefined) {
       results.push({ 
         name: 'Data Binding', 
         status: 'WARN', 
@@ -279,7 +283,7 @@ function validateBindings(node: ViewNode, context: Record<string, any>, results:
          });
     }
 
-    if (!isScoped && context[node.valueBinding] === undefined) {
+    if (!isScoped && ctx[node.valueBinding] === undefined) {
       results.push({ 
         name: 'Data Binding', 
         status: 'WARN', 
@@ -292,7 +296,7 @@ function validateBindings(node: ViewNode, context: Record<string, any>, results:
   
   if (node.children) {
     const nextIsScoped = isScoped || node.type === 'list';
-    node.children.forEach(child => validateBindings(child, context, results, nextIsScoped));
+    node.children.forEach(child => validateBindings(child, ctx, results, nextIsScoped));
   }
 }
 

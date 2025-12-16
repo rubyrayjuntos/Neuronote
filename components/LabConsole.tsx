@@ -232,11 +232,18 @@ export const LabConsole: React.FC<LabConsoleProps> = ({ metrics, history, intera
                             
                             {/* Ghost Data Proof */}
                             {record.migration.ghost > 0 && (
-                                <div className="flex items-center gap-2 p-1.5 bg-purple-900/20 rounded border border-purple-800/30 animate-in fade-in slide-in-from-left-2">
-                                    <Ghost className="w-3 h-3 text-purple-400" />
-                                    <span className="text-purple-300 font-bold">
-                                        {record.migration.ghost} Ghost Keys Preserved
-                                    </span>
+                                <div className="flex flex-col gap-1 p-1.5 bg-purple-900/20 rounded border border-purple-800/30 animate-in fade-in slide-in-from-left-2">
+                                    <div className="flex items-center gap-2">
+                                        <Ghost className="w-3 h-3 text-purple-400" />
+                                        <span className="text-purple-300 font-bold">
+                                            {record.migration.ghost} Ghost Keys Preserved
+                                        </span>
+                                    </div>
+                                    {record.migration.ghostKeys && (
+                                        <div className="text-[9px] text-purple-400/70 font-mono pl-5 break-all">
+                                            {record.migration.ghostKeys.join(', ')}
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>

@@ -83,6 +83,7 @@ export function calculateMigrationStats(prev: AppContext, next: AppContext, targ
   let dropped = 0;
   let ghost = 0;
   const droppedKeys: string[] = [];
+  const ghostKeys: string[] = [];
 
   nextKeys.forEach(k => {
     if (k.startsWith('_')) return; // Ignore system keys in stats
@@ -92,6 +93,7 @@ export function calculateMigrationStats(prev: AppContext, next: AppContext, targ
         // Check if this is a "Ghost Key" (Present in data, but NOT in the new schema)
         if (targetDef && !schemaKeys.has(k)) {
             ghost++;
+            ghostKeys.push(k);
         }
     } else {
         added++;
@@ -111,6 +113,7 @@ export function calculateMigrationStats(prev: AppContext, next: AppContext, targ
     added,
     dropped,
     ghost,
+    ghostKeys,
     details: droppedKeys.length > 0 ? `Dropped: ${droppedKeys.join(', ')}` : 'Lossless'
   };
 }
