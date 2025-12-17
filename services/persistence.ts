@@ -1,4 +1,5 @@
 import { AppDefinition, AppContext, ChangeRecord } from '../types';
+import { MAX_JOURNAL_ENTRIES } from '../constants';
 
 const SNAPSHOT_KEY = 'neuronote_snapshot_v1';
 const JOURNAL_KEY = 'neuronote_journal_v1';
@@ -40,8 +41,8 @@ export const Persistence = {
   // --- JOURNAL (History) ---
   saveJournal: (journal: ChangeRecord[]) => {
       try {
-          // Limit to last 20 entries to prevent QuotaExceededError
-          const trimmed = journal.slice(0, 20); 
+          // Limit entries to prevent QuotaExceededError
+          const trimmed = journal.slice(0, MAX_JOURNAL_ENTRIES); 
           localStorage.setItem(JOURNAL_KEY, JSON.stringify(trimmed));
           return true;
       } catch (e) {

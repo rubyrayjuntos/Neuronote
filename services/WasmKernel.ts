@@ -1,4 +1,13 @@
 import { AppDefinition, AppContext, PipelineDefinition, PipelineTrace, NodeTrace } from "../types";
+import { 
+  MAX_INSTRUCTIONS, 
+  WASM_MEMORY_LIMIT, 
+  KERNEL_BOOT_TIMEOUT_MS, 
+  DISPATCH_TIMEOUT_MS,
+  DEFAULT_PIPELINE_TIMEOUT_MS,
+  MAX_PIPELINE_BYTES,
+  MAX_OUTPUT_BYTES
+} from "../constants";
 
 /**
  * THE LOGIC KERNEL (Guest Code)
@@ -194,9 +203,17 @@ globalThis.dispatch = function(event, payload, scopeId) {
 /**
  * THE WORKER BLOB
  * Contains QuickJS VM + Dataflow Engine (Tier 2)
+ * Constants are injected from the Host to maintain single source of truth.
  */
 const WORKER_BLOB = `
 import { getQuickJS } from "https://esm.sh/quickjs-emscripten@0.29.0";
+
+// Injected Governance Constants (from Host)
+const MAX_INSTRUCTIONS = ${MAX_INSTRUCTIONS};
+const WASM_MEMORY_LIMIT = ${WASM_MEMORY_LIMIT};
+const DEFAULT_PIPELINE_TIMEOUT_MS = ${DEFAULT_PIPELINE_TIMEOUT_MS};
+const MAX_PIPELINE_BYTES = ${MAX_PIPELINE_BYTES};
+const MAX_OUTPUT_BYTES = ${MAX_OUTPUT_BYTES};
 
 const KERNEL_SOURCE = ${JSON.stringify(KERNEL_SOURCE)};
 
@@ -316,6 +333,16 @@ function performRealFFT(waveform, bins) {
     return result;
 }
 
+/**
+ * OPERATOR IMPLEMENTATIONS
+ * 
+ * IMPORTANT: This must stay in sync with operators/registry.ts
+ * The registry is the source of truth for schemas/types.
+ * These implementations run inside the Worker (needed for OffscreenCanvas, etc.)
+ * 
+ * Tier 1 (sync): Text, Math, List, Logic, Utility
+ * Tier 2 (async): Image, Audio (use OffscreenCanvas/AudioContext)
+ */
 const OPERATORS = {
     // TEXT OPS
     'Text.ToUpper': (inputs) => (String(inputs[0] || '')).toUpperCase(),
@@ -363,6 +390,37 @@ const OPERATORS = {
         const arr = Array.isArray(inputs[0]) ? inputs[0] : [];
         const n = Number(inputs[1]) || 0;
         return arr.slice(0, n);
+    },
+    'List.Reduce': (inputs) => {
+        const arr = Array.isArray(inputs[0]) ? inputs[0] : [];
+        const initial = inputs[1];
+        const operation = String(inputs[2] || '').toLowerCase();
+        
+        switch (operation) {
+            case 'sum':
+                return arr.reduce((acc, x) => Number(acc) + Number(x), Number(initial) || 0);
+            case 'product':
+                return arr.reduce((acc, x) => Number(acc) * Number(x), Number(initial) || 1);
+            case 'concat':
+                return arr.reduce((acc, x) => String(acc) + String(x), String(initial) || '');
+            case 'min':
+                return arr.reduce((acc, x) => Math.min(Number(acc), Number(x)), Number(initial) || Infinity);
+            case 'max':
+                return arr.reduce((acc, x) => Math.max(Number(acc), Number(x)), Number(initial) || -Infinity);
+            case 'count':
+                return arr.length;
+            default:
+                return initial;
+        }
+    },
+    'List.FoldN': (inputs) => {
+        const MAX_FOLD_ITERATIONS = 1000;
+        const n = Math.min(MAX_FOLD_ITERATIONS, Math.max(0, Math.floor(Number(inputs[0]) || 0)));
+        const initial = Number(inputs[1]) || 0;
+        const step = Number(inputs[2]) || 0;
+        
+        if (step === 0) return initial;
+        return initial + (step * n);
     },
 
     // IMAGE OPS (Async)
@@ -449,12 +507,26 @@ async function executePipeline(pipeId, scopeId) {
         return ref; 
     }
 
+    // Helper to estimate byte size of a value
+    function estimateBytes(val) {
+        if (val === null || val === undefined) return 0;
+        if (typeof val === 'string') return val.length * 2; // UTF-16
+        if (typeof val === 'number') return 8;
+        if (typeof val === 'boolean') return 4;
+        if (Array.isArray(val)) return val.reduce((acc, v) => acc + estimateBytes(v), 0);
+        if (typeof val === 'object') return JSON.stringify(val).length * 2;
+        return 0;
+    }
+
     try {
         const sortedNodes = getExecutionOrder(pipe.nodes);
-        const maxTime = pipe.budget?.maxTimeMs || 1000;
+        const maxTime = pipe.budget?.maxTimeMs || DEFAULT_PIPELINE_TIMEOUT_MS;
+        const maxBytes = pipe.budget?.maxBytes || MAX_PIPELINE_BYTES;
+        const maxOutputBytes = pipe.budget?.maxOutputBytes || MAX_OUTPUT_BYTES;
+        let totalBytesInFlight = 0;
 
         for (const node of sortedNodes) {
-            // Strict Budget Check
+            // Time Budget Check
             if (performance.now() - startTime > maxTime) {
                 trace.status = 'timeout';
                 throw new Error("Pipeline exceeded runtime budget of " + maxTime + "ms");
@@ -471,10 +543,20 @@ async function executePipeline(pipeId, scopeId) {
                 const result = await op(inputs);
                 nodeResults[node.id] = result;
 
+                // Bytes Budget Check
+                const resultBytes = estimateBytes(result);
+                totalBytesInFlight += resultBytes;
+                
+                if (totalBytesInFlight > maxBytes) {
+                    trace.status = 'failed';
+                    throw new Error("GOVERNANCE: Pipeline exceeded maxBytes budget (" + Math.round(totalBytesInFlight/1024) + "KB > " + Math.round(maxBytes/1024) + "KB)");
+                }
+
                 // Trace Success
                 let summary = typeof result;
                 if (typeof result === 'string' && result.length > 50) summary = 'string<' + result.length + '>';
                 if (Array.isArray(result)) summary = 'array<' + result.length + '>';
+                if (resultBytes > 1024) summary += ' (' + Math.round(resultBytes/1024) + 'KB)';
 
                 trace.nodeTraces.push({
                     nodeId: node.id,
@@ -484,20 +566,33 @@ async function executePipeline(pipeId, scopeId) {
                     outputSummary: summary
                 });
 
-            } catch (e) {
+            } catch (opError) {
+                // Operator Error Boundary: wrap error with context
+                const errorMessage = opError instanceof Error ? opError.message : String(opError);
                 trace.nodeTraces.push({
                     nodeId: node.id,
                     op: node.op,
                     status: 'failed',
-                    durationMs: performance.now() - nodeStart
+                    durationMs: performance.now() - nodeStart,
+                    error: errorMessage
                 });
-                throw e;
+                trace.status = 'failed';
+                throw new Error("Operator '" + node.op + "' failed at node '" + node.id + "': " + errorMessage);
             }
         }
 
         trace.totalDurationMs = performance.now() - startTime;
         let output = null;
-        if (pipe.output) output = nodeResults[pipe.output];
+        if (pipe.output) {
+            output = nodeResults[pipe.output];
+            
+            // Final output size check
+            const outputBytes = estimateBytes(output);
+            if (outputBytes > maxOutputBytes) {
+                trace.status = 'failed';
+                throw new Error("GOVERNANCE: Pipeline output exceeds maxOutputBytes (" + Math.round(outputBytes/1024) + "KB > " + Math.round(maxOutputBytes/1024) + "KB)");
+            }
+        }
         
         return { output, trace };
 
@@ -511,8 +606,7 @@ async function executePipeline(pipeId, scopeId) {
 
 // ------------------------------------------
 
-// GOVERNANCE CONFIG
-const MAX_INSTRUCTIONS = 100000; 
+// Instruction counter for fuel metering
 let instructionCount = 0;
 
 function marshallJSON(ctx, json) {
@@ -537,7 +631,7 @@ self.onmessage = async (e) => {
        }
        
        runtime = module.newRuntime();
-       runtime.setMemoryLimit(1024 * 1024 * 32);
+       runtime.setMemoryLimit(WASM_MEMORY_LIMIT);
        
        instructionCount = 0;
        runtime.setInterruptHandler(() => {
@@ -647,67 +741,134 @@ self.onmessage = async (e) => {
 
 /**
  * HOST KERNEL PROXY
+ * Manages the WebWorker lifecycle and communication.
  */
 export class WasmKernel {
   private worker: Worker | null = null;
-  private pending = new Map<string, { resolve: Function, reject: Function }>();
+  private pending = new Map<string, { resolve: (value: unknown) => void, reject: (reason: Error) => void, timer: ReturnType<typeof setTimeout> }>();
+  private activeTasks = new Map<string, { runId: string, startTime: number }>();
 
-  async init(context: AppContext, definition: AppDefinition) {
+  async init(context: AppContext, definition: AppDefinition): Promise<void> {
     this.dispose();
     const blob = new Blob([WORKER_BLOB], { type: "application/javascript" });
     const url = URL.createObjectURL(blob);
     this.worker = new Worker(url, { type: "module" });
     
-    this.worker.onmessage = (e) => {
+    this.worker.onmessage = (e: MessageEvent<{ type: string; id: string; payload?: unknown; error?: string }>) => {
         const { type, id, payload, error } = e.data;
         if (this.pending.has(id)) {
-            const { resolve, reject } = this.pending.get(id)!;
+            const pending = this.pending.get(id)!;
+            clearTimeout(pending.timer);
             this.pending.delete(id);
-            if (type === 'ERROR') reject(new Error(error));
-            else resolve(payload);
+            this.activeTasks.delete(id);
+            if (type === 'ERROR') pending.reject(new Error(error || 'Unknown worker error'));
+            else pending.resolve(payload);
         }
     };
-    return this.send('BOOT', { context, definition }, 20000); 
+    await this.send<void>('BOOT', { context, definition }, KERNEL_BOOT_TIMEOUT_MS); 
   }
 
-  async dispatch(event: string, payload: any, scopeId: string = 'root'): Promise<{context: AppContext, traces?: PipelineTrace[]}> {
-      return this.send('DISPATCH', { event, data: payload, scopeId }, 1000) as Promise<{context: AppContext, traces?: PipelineTrace[]}>;
+  async dispatch(event: string, payload: unknown, scopeId: string = 'root'): Promise<{context: AppContext, traces?: PipelineTrace[]}> {
+      return this.send<{context: AppContext, traces?: PipelineTrace[]}>('DISPATCH', { event, data: payload, scopeId }, DISPATCH_TIMEOUT_MS);
   }
 
   async forceHang(): Promise<void> {
-      return this.send('TEST_HANG', {}, 2000) as Promise<void>;
+      return this.send<void>('TEST_HANG', {}, DISPATCH_TIMEOUT_MS * 2);
   }
 
-  private send(type: string, payload: any, timeoutMs: number) {
-      return new Promise((resolve, reject) => {
+  /**
+   * Cancel a specific active task by its ID.
+   * Since Worker runs synchronously, this will terminate and restart the kernel.
+   * Returns true if task was found and cancelled.
+   */
+  cancel(taskId: string): boolean {
+      if (!this.pending.has(taskId)) {
+          return false;
+      }
+      
+      const pending = this.pending.get(taskId)!;
+      clearTimeout(pending.timer);
+      this.pending.delete(taskId);
+      this.activeTasks.delete(taskId);
+      
+      pending.reject(new Error('GOVERNANCE: Task cancelled by user'));
+      
+      // If there are other pending tasks, we can't selectively cancel
+      // For safety, terminate and let caller reinitialize if needed
+      if (this.pending.size === 0) {
+          // No other pending - safe to continue
+      } else {
+          // Must terminate to cancel (Worker is synchronous)
+          this.terminate();
+      }
+      
+      return true;
+  }
+
+  /**
+   * Cancel all active tasks.
+   */
+  cancelAll(): void {
+      for (const [id, pending] of this.pending) {
+          clearTimeout(pending.timer);
+          pending.reject(new Error('GOVERNANCE: All tasks cancelled'));
+      }
+      this.pending.clear();
+      this.activeTasks.clear();
+  }
+
+  /**
+   * Get list of currently active task IDs.
+   */
+  getActiveTasks(): Array<{ id: string; runId: string; elapsedMs: number }> {
+      const now = Date.now();
+      return Array.from(this.activeTasks.entries()).map(([id, task]) => ({
+          id,
+          runId: task.runId,
+          elapsedMs: now - task.startTime
+      }));
+  }
+
+  private send<T>(type: string, payload: Record<string, unknown>, timeoutMs: number): Promise<T> {
+      return new Promise<T>((resolve, reject) => {
           if (!this.worker) return reject(new Error("Worker terminated"));
           const id = Math.random().toString(36).slice(2);
+          const runId = `run_${Date.now()}_${id}`;
+          
           const timer = setTimeout(() => {
               if (this.pending.has(id)) {
                   this.pending.delete(id);
+                  this.activeTasks.delete(id);
                   this.terminate(); 
                   reject(new Error(`GOVERNANCE: Wall-clock timeout (> ${timeoutMs}ms). Worker terminated.`));
               }
           }, timeoutMs);
 
           this.pending.set(id, { 
-              resolve: (val: any) => { clearTimeout(timer); resolve(val); },
-              reject: (err: any) => { clearTimeout(timer); reject(err); }
+              resolve: (val: unknown) => { resolve(val as T); },
+              reject: (err: Error) => { reject(err); },
+              timer
           });
+          
+          this.activeTasks.set(id, { runId, startTime: Date.now() });
           this.worker.postMessage({ type, payload, id });
       });
   }
   
-  terminate() {
+  terminate(): void {
       if (this.worker) {
           this.worker.terminate();
           this.worker = null;
       }
-      this.pending.forEach(p => p.reject(new Error("Worker terminated")));
+      for (const [id, pending] of this.pending) {
+          clearTimeout(pending.timer);
+          pending.reject(new Error("Worker terminated"));
+      }
       this.pending.clear();
+      this.activeTasks.clear();
   }
   
-  dispose() {
+  dispose(): void {
       this.terminate();
   }
 }

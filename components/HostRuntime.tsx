@@ -22,16 +22,15 @@ interface ErrorBoundaryState {
 }
 
 class RuntimeErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  declare props: ErrorBoundaryProps;  // Explicit declaration for React 19 types
   public state: ErrorBoundaryState = { hasError: false };
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(_error: Error): ErrorBoundaryState {
     return { hasError: true };
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    if (this.props.onError) {
-        this.props.onError(error);
-    }
+    this.props.onError?.(error);
     console.error("Runtime Crash:", error, errorInfo);
   }
 
@@ -117,32 +116,209 @@ const CanvasPrimitive: React.FC<{ src?: string, className?: string }> = ({ src, 
     return <img src={src} alt="Output" className={`rounded border border-zinc-800 object-contain bg-black ${className || ''}`} />;
 };
 
+// ============================================================================
+// HOST PRIMITIVES FOR CONTROLLED OVERLAYS
+// These provide safe overlay patterns without allowing arbitrary positioning
+// ============================================================================
+
+interface ModalPrimitiveProps {
+  isOpen: boolean;
+  onClose: () => void;
+  title?: string;
+  children?: React.ReactNode;
+  className?: string;
+}
+
+const ModalPrimitive: React.FC<ModalPrimitiveProps> = ({ isOpen, onClose, title, children, className }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
+      <div 
+        className={`bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl p-6 max-w-lg w-full mx-4 max-h-[80vh] overflow-auto ${className || ''}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {title && (
+          <div className="flex items-center justify-between mb-4 pb-3 border-b border-zinc-800">
+            <h2 className="text-lg font-semibold text-zinc-100">{title}</h2>
+            <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300 transition-colors">
+              <Icons.X className="w-5 h-5" />
+            </button>
+          </div>
+        )}
+        {children}
+      </div>
+    </div>
+  );
+};
+
+interface ToastPrimitiveProps {
+  message: string;
+  type?: 'info' | 'success' | 'error' | 'warning';
+  isVisible: boolean;
+  className?: string;
+}
+
+const ToastPrimitive: React.FC<ToastPrimitiveProps> = ({ message, type = 'info', isVisible, className }) => {
+  if (!isVisible || !message) return null;
+  
+  const colors = {
+    info: 'bg-zinc-800 text-zinc-200 border-zinc-700',
+    success: 'bg-emerald-950 text-emerald-200 border-emerald-800',
+    error: 'bg-rose-950 text-rose-200 border-rose-800',
+    warning: 'bg-amber-950 text-amber-200 border-amber-800',
+  };
+  
+  const icons = {
+    info: <Icons.Info className="w-4 h-4" />,
+    success: <Icons.CheckCircle className="w-4 h-4" />,
+    error: <Icons.XCircle className="w-4 h-4" />,
+    warning: <Icons.AlertTriangle className="w-4 h-4" />,
+  };
+
+  return (
+    <div className={`fixed bottom-4 right-4 z-40 px-4 py-3 rounded-lg border shadow-lg flex items-center gap-2 ${colors[type]} ${className || ''}`}>
+      {icons[type]}
+      <span className="text-sm">{message}</span>
+    </div>
+  );
+};
+
+interface DropdownPrimitiveProps {
+  trigger: React.ReactNode;
+  items: Array<{ label: string; onClick: () => void; icon?: string }>;
+  isOpen: boolean;
+  onToggle: () => void;
+  className?: string;
+}
+
+const DropdownPrimitive: React.FC<DropdownPrimitiveProps> = ({ trigger, items, isOpen, onToggle, className }) => {
+  return (
+    <div className={`relative inline-block ${className || ''}`}>
+      <div onClick={onToggle}>{trigger}</div>
+      {isOpen && (
+        <div className="absolute top-full left-0 mt-1 min-w-[160px] bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl py-1 z-20">
+          {items.map((item, idx) => (
+            <button
+              key={idx}
+              onClick={() => { item.onClick(); onToggle(); }}
+              className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 flex items-center gap-2"
+            >
+              {item.icon && (() => {
+                const IconComp = (Icons as Record<string, React.FC<{className?: string}>>)[item.icon];
+                return IconComp ? <IconComp className="w-4 h-4" /> : null;
+              })()}
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface TooltipPrimitiveProps {
+  content: string;
+  children: React.ReactNode;
+  position?: 'top' | 'bottom' | 'left' | 'right';
+  className?: string;
+}
+
+const TooltipPrimitive: React.FC<TooltipPrimitiveProps> = ({ content, children, position = 'top', className }) => {
+  const [isVisible, setIsVisible] = useState(false);
+  
+  const positions = {
+    top: 'bottom-full left-1/2 -translate-x-1/2 mb-2',
+    bottom: 'top-full left-1/2 -translate-x-1/2 mt-2',
+    left: 'right-full top-1/2 -translate-y-1/2 mr-2',
+    right: 'left-full top-1/2 -translate-y-1/2 ml-2',
+  };
+
+  return (
+    <div 
+      className={`relative inline-block ${className || ''}`}
+      onMouseEnter={() => setIsVisible(true)}
+      onMouseLeave={() => setIsVisible(false)}
+    >
+      {children}
+      {isVisible && (
+        <div className={`absolute ${positions[position]} px-2 py-1 bg-zinc-800 text-zinc-200 text-xs rounded whitespace-nowrap z-10`}>
+          {content}
+        </div>
+      )}
+    </div>
+  );
+};
+
 
 export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, setContext, onLog, onInteraction, onRuntimeError }) => {
   const kernelRef = useRef<WasmKernel | null>(null);
   const [isKernelReady, setIsKernelReady] = useState(false);
   const [governanceError, setGovernanceError] = useState<string | null>(null);
+  
+  // Stable ref for onLog to avoid triggering re-init
+  const onLogRef = useRef(onLog);
+  useEffect(() => { onLogRef.current = onLog; }, [onLog]);
 
-  // Initialize WASM Kernel
-  const initKernel = useCallback(async () => {
+  // Initialize WASM Kernel - only depends on definition identity
+  useEffect(() => {
+    let disposed = false;
+    
+    const boot = async () => {
        setIsKernelReady(false);
        setGovernanceError(null);
-       if (!kernelRef.current) kernelRef.current = new WasmKernel();
+       
+       // Always create fresh kernel for each boot
+       const kernel = new WasmKernel();
+       kernelRef.current = kernel;
+       
        try {
-           onLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'INFO', message: 'Booting WASM Sandbox...' });
-           await kernelRef.current.init(context, definition);
+           onLogRef.current({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'INFO', message: 'Booting WASM Sandbox...' });
+           await kernel.init(context, definition);
+           
+           // Check if we were disposed during async boot
+           if (disposed) {
+               kernel.dispose();
+               return;
+           }
+           
            setIsKernelReady(true);
-           onLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: 'Sandbox Active. 32MB Cap.' });
-       } catch (e: any) {
-           onLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `Boot Failed: ${e.message}` });
-           setGovernanceError(e.message);
+           onLogRef.current({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: 'Sandbox Active. 32MB Cap.' });
+       } catch (e: unknown) {
+           if (disposed) return; // Ignore errors after disposal
+           const message = e instanceof Error ? e.message : 'Unknown error';
+           onLogRef.current({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `Boot Failed: ${message}` });
+           setGovernanceError(message);
        }
-  }, [definition, onLog]); 
+    };
+    
+    boot();
+    
+    return () => {
+      disposed = true;
+      kernelRef.current?.dispose();
+      kernelRef.current = null;
+    };
+  }, [definition]);
 
-  useEffect(() => {
-    initKernel();
-    return () => { kernelRef.current?.dispose(); };
-  }, [initKernel]);
+  // Restart kernel after termination (e.g., timeout)
+  const restartKernel = useCallback(async () => {
+    setIsKernelReady(false);
+    setGovernanceError(null);
+    
+    const kernel = new WasmKernel();
+    kernelRef.current = kernel;
+    
+    try {
+      onLogRef.current({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'INFO', message: 'Restarting WASM Sandbox...' });
+      await kernel.init(context, definition);
+      setIsKernelReady(true);
+      onLogRef.current({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: 'Sandbox Restarted. 32MB Cap.' });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      onLogRef.current({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `Restart Failed: ${message}` });
+      setGovernanceError(message);
+    }
+  }, [context, definition]);
 
   // --- EVENT DISPATCHER ---
   const sendEvent = useCallback(async (event: string, payload?: any, scopeId: string | 'root' = 'root') => {
@@ -172,15 +348,15 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
                  });
             }
         }
-    } catch (e: any) {
-        const msg = e.message || 'Unknown Error';
+    } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : 'Unknown Error';
         onLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `GOVERNANCE: ${msg}` });
         if (msg.includes('terminated')) {
              setGovernanceError("Sandbox Timeout. Restarting...");
-             initKernel(); 
+             restartKernel(); 
         }
     }
-  }, [isKernelReady, onLog, setContext, initKernel]);
+  }, [isKernelReady, onLog, setContext, restartKernel]);
 
   useEffect(() => {
       const pulseInterval = definition.machine.pulse;
@@ -208,7 +384,8 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
     if (textBinding && data[textBinding] !== undefined) childrenContent = data[textBinding];
     else if (children && type !== 'list' && type !== 'tabs') childrenContent = children.map(child => <React.Fragment key={child.id}>{renderNode(child, scopeId)}</React.Fragment>);
 
-    const commonProps = { key: id, ...props };
+    const commonProps = { ...props };
+    const nodeKey = id;
     const handleClick = (e: React.MouseEvent) => {
       e.stopPropagation();
       onInteraction({ id: crypto.randomUUID(), timestamp: Date.now(), type: 'click', targetId: id, event: onClick || 'none' });
@@ -229,35 +406,35 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
     };
 
     switch (type) {
-      case 'container': return <div {...commonProps}>{childrenContent}</div>;
-      case 'card': return <div {...commonProps} className={`bg-zinc-900 border border-zinc-800 rounded-xl p-4 shadow-sm ${props.className || ''}`}>{childrenContent}</div>;
-      case 'header': return <h1 {...commonProps}>{childrenContent}</h1>;
+      case 'container': return <div key={nodeKey} {...commonProps}>{childrenContent}</div>;
+      case 'card': return <div key={nodeKey} {...commonProps} className={`bg-zinc-900 border border-zinc-800 rounded-xl p-4 shadow-sm ${props.className || ''}`}>{childrenContent}</div>;
+      case 'header': return <h1 key={nodeKey} {...commonProps}>{childrenContent}</h1>;
       
       case 'text':
       case 'text-display': // Map text-display to text (handles textarea/div)
-           return (state === 'editing' && textBinding) ? <textarea {...commonProps} value={data[textBinding] || ''} onChange={(e) => sendEvent(`UPDATE_CONTEXT:${textBinding}`, e.target.value, scopeId)} /> : <div {...commonProps}>{childrenContent}</div>;
+           return (state === 'editing' && textBinding) ? <textarea key={nodeKey} {...commonProps} value={data[textBinding] || ''} onChange={(e) => sendEvent(`UPDATE_CONTEXT:${textBinding}`, e.target.value, scopeId)} /> : <div key={nodeKey} {...commonProps}>{childrenContent}</div>;
       
-      case 'button': return <button {...commonProps} onClick={handleClick}>{props.label || childrenContent || 'Button'}</button>;
+      case 'button': return <button key={nodeKey} {...commonProps} onClick={handleClick}>{props.label || childrenContent || 'Button'}</button>;
       
       case 'input': 
       case 'text-input': // Map text-input to input
-           return <input {...commonProps} value={valueBinding ? (data[valueBinding] || '') : undefined} onChange={handleInput} />;
+           return <input key={nodeKey} {...commonProps} value={valueBinding ? (data[valueBinding] || '') : undefined} onChange={handleInput} />;
       
-      case 'element': { const Tag = (node.tag || 'div') as any; return <Tag {...commonProps} onClick={handleClick}>{childrenContent}</Tag>; }
-      case 'icon': { const IconComp = (Icons as any)[props.name || 'HelpCircle'] || Icons.HelpCircle; return <IconComp {...commonProps} onClick={handleClick} />; }
-      case 'clock': return <ClockPrimitive {...commonProps} />;
-      case 'chart': return <ChartPrimitive data={textBinding ? (data[textBinding] || []) : []} {...commonProps} />;
+      case 'element': { const Tag = (node.tag || 'div') as React.ElementType; return <Tag key={nodeKey} {...commonProps} onClick={handleClick}>{childrenContent}</Tag>; }
+      case 'icon': { const iconName = (props.name as string) || 'HelpCircle'; const IconComp = (Icons as Record<string, React.FC>)[iconName] || Icons.HelpCircle; return <IconComp key={nodeKey} {...commonProps} onClick={handleClick} />; }
+      case 'clock': return <ClockPrimitive key={nodeKey} {...commonProps} />;
+      case 'chart': return <ChartPrimitive key={nodeKey} data={textBinding ? (data[textBinding] || []) : []} {...commonProps} />;
       
       // NEW UI
-      case 'file-input': return <FileInputPrimitive onChange={handleFileChange} {...commonProps} />;
-      case 'slider': return <input type="range" {...commonProps} value={valueBinding ? (data[valueBinding] || 0) : 0} onChange={handleInput} />;
-      case 'canvas': return <CanvasPrimitive src={textBinding ? data[textBinding] : undefined} {...commonProps} />;
+      case 'file-input': return <FileInputPrimitive key={nodeKey} onChange={handleFileChange} {...commonProps} />;
+      case 'slider': return <input key={nodeKey} type="range" {...commonProps} value={valueBinding ? (data[valueBinding] || 0) : 0} onChange={handleInput} />;
+      case 'canvas': return <CanvasPrimitive key={nodeKey} src={textBinding ? data[textBinding] : undefined} {...commonProps} />;
 
       case 'list': {
-          const key = props.binding || textBinding || valueBinding;
-          const items = (key && Array.isArray(data[key])) ? data[key] : [];
+          const key = (props.binding as string) || textBinding || valueBinding;
+          const items = (key && Array.isArray(data[key as keyof typeof data])) ? (data[key as keyof typeof data] as unknown[]) : [];
           return (
-              <div {...commonProps}>
+              <div key={nodeKey} {...commonProps}>
                   {items.length === 0 && <div className="text-zinc-600 italic p-2">No items</div>}
                   {items.map((item: any, idx: number) => {
                       const isActor = typeof item === 'string' && item.startsWith('actor_');
@@ -272,7 +449,7 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
           if (textBinding) {
               const items = (Array.isArray(data[textBinding])) ? data[textBinding] : [];
               return (
-                  <div {...commonProps} className={`flex flex-col gap-4 ${props.className || ''}`}>
+                  <div key={nodeKey} {...commonProps} className={`flex flex-col gap-4 ${props.className || ''}`}>
                       <div className="flex border-b border-zinc-800 overflow-x-auto no-scrollbar">
                           {items.map((item: any) => {
                               const itemId = typeof item === 'string' ? item : item.id;
@@ -286,8 +463,85 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
                   </div>
               )
           }
-          return <div {...commonProps} className="text-red-500">Static Tabs Deprecated</div>;
+          return <div key={nodeKey} {...commonProps} className="text-red-500">Static Tabs Deprecated</div>;
       }
+
+      // HOST PRIMITIVES - Safe overlay patterns
+      case 'modal': {
+          const isOpen = valueBinding ? !!data[valueBinding] : false;
+          const title = (props.title as string) || '';
+          return (
+              <ModalPrimitive 
+                  isOpen={isOpen} 
+                  onClose={() => valueBinding && sendEvent(`UPDATE_CONTEXT:${valueBinding}`, false, scopeId)}
+                  title={title}
+                  className={props.className as string}
+              >
+                  {children?.map(child => <React.Fragment key={child.id}>{renderNode(child, scopeId)}</React.Fragment>)}
+              </ModalPrimitive>
+          );
+      }
+      case 'toast': {
+          const isVisible = valueBinding ? !!data[valueBinding] : false;
+          const message = textBinding ? String(data[textBinding] || '') : (props.message as string) || '';
+          const toastType = (props.type as 'info' | 'success' | 'error' | 'warning') || 'info';
+          return (
+              <ToastPrimitive 
+                  isVisible={isVisible} 
+                  message={message}
+                  type={toastType}
+                  className={props.className as string}
+              />
+          );
+      }
+      case 'dropdown': {
+          const isOpen = valueBinding ? !!data[valueBinding] : false;
+          const items = textBinding && Array.isArray(data[textBinding]) 
+              ? (data[textBinding] as Array<{label: string; event?: string; icon?: string}>).map(item => ({
+                  label: item.label || String(item),
+                  onClick: () => item.event && sendEvent(item.event, item.label, scopeId),
+                  icon: item.icon
+              }))
+              : [];
+          const trigger = children?.[0] ? renderNode(children[0], scopeId) : <button>Menu</button>;
+          return (
+              <DropdownPrimitive
+                  isOpen={isOpen}
+                  onToggle={() => valueBinding && sendEvent(`UPDATE_CONTEXT:${valueBinding}`, !isOpen, scopeId)}
+                  trigger={trigger}
+                  items={items}
+                  className={props.className as string}
+              />
+          );
+      }
+      case 'tooltip': {
+          const content = textBinding ? String(data[textBinding] || '') : (props.content as string) || '';
+          const position = (props.position as 'top' | 'bottom' | 'left' | 'right') || 'top';
+          return (
+              <TooltipPrimitive content={content} position={position} className={props.className as string}>
+                  {children?.map(child => <React.Fragment key={child.id}>{renderNode(child, scopeId)}</React.Fragment>)}
+              </TooltipPrimitive>
+          );
+      }
+      case 'popover': {
+          // Popover is similar to dropdown but with arbitrary content
+          const isOpen = valueBinding ? !!data[valueBinding] : false;
+          const trigger = children?.[0] ? renderNode(children[0], scopeId) : null;
+          const content = children?.slice(1);
+          return (
+              <div className={`relative inline-block ${props.className || ''}`}>
+                  <div onClick={() => valueBinding && sendEvent(`UPDATE_CONTEXT:${valueBinding}`, !isOpen, scopeId)}>
+                      {trigger}
+                  </div>
+                  {isOpen && (
+                      <div className="absolute top-full left-0 mt-2 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl p-4 z-20 min-w-[200px]">
+                          {content?.map(child => <React.Fragment key={child.id}>{renderNode(child, scopeId)}</React.Fragment>)}
+                      </div>
+                  )}
+              </div>
+          );
+      }
+
       default: return <div className="text-red-500">Unknown Node: {type}</div>;
     }
   };

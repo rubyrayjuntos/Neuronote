@@ -1,14 +1,36 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { generateAppProposal } from './services/gemini';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { createProvider, extractExecutionFeedback, AIProvider, ProviderType, AVAILABLE_PROVIDERS } from './services/ai';
 import { Persistence } from './services/persistence';
 import { HostRuntime } from './components/HostRuntime';
 import { LabConsole } from './components/LabConsole';
-import { INITIAL_APP } from './constants';
+import { INITIAL_APP, MAX_LOG_ENTRIES, MAX_INTERACTION_TRACES } from './constants';
 import { AppDefinition, SystemLog, AppContext, VerificationReport, ChangeRecord, InteractionTrace } from './types';
 import { verifyProposal } from './utils/validator';
 import { computeDiff, computeSessionMetrics } from './utils/analytics';
 import { migrateContext, salvageContext, verifyLensLaws } from './utils/migration';
+import { runHonestyOracle, formatHonestyReport } from './utils/honestyOracle';
+import { useDebounce } from './utils/hooks';
 import { Terminal, Cpu, ShieldCheck, Activity, BrainCircuit, RefreshCw, AlertTriangle, CheckCircle, XCircle, Microscope, GitCommit, Database } from 'lucide-react';
+
+import { buildSystemPrompt } from './services/ai/gemini';
+
+// Initialize AI provider based on environment
+const getInitialProvider = (): AIProvider => {
+  try {
+    const providerType = (import.meta.env.VITE_AI_PROVIDER as ProviderType) || 'gemini';
+    return createProvider(providerType);
+  } catch (e) {
+    console.warn('Failed to create AI provider:', e);
+    // Return a fallback that will error on use
+    return {
+      name: 'Unconfigured',
+      modelId: 'none',
+      generateProposal: async () => {
+        throw new Error('AI provider not configured. Set VITE_API_KEY for Gemini or configure AWS credentials.');
+      }
+    };
+  }
+};
 
 export default function App() {
   const [appDef, setAppDef] = useState<AppDefinition>(INITIAL_APP);
@@ -21,6 +43,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [verificationReport, setVerificationReport] = useState<VerificationReport | null>(null);
 
+  // AI Provider State - allows runtime provider switching
+  const [aiProvider, setAiProvider] = useState<AIProvider>(getInitialProvider);
+
   // 9. Observability State
   const [viewMode, setViewMode] = useState<'control' | 'lab'>('control');
   const [changeHistory, setChangeHistory] = useState<ChangeRecord[]>([]);
@@ -29,11 +54,11 @@ export default function App() {
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   const addLog = useCallback((log: SystemLog) => {
-    setLogs(prev => [...prev.slice(-49), log]);
+    setLogs(prev => [...prev.slice(-(MAX_LOG_ENTRIES - 1)), log]);
   }, []);
 
   const recordInteraction = useCallback((trace: InteractionTrace) => {
-      setInteractions(prev => [...prev.slice(-99), trace]);
+      setInteractions(prev => [...prev.slice(-(MAX_INTERACTION_TRACES - 1)), trace]);
   }, []);
 
   useEffect(() => {
@@ -48,33 +73,44 @@ export default function App() {
       if (snapshot) {
           setAppDef(snapshot.definition);
           setContext(snapshot.context);
-          addLog({ id: 'boot-persist', timestamp: Date.now(), source: 'STORAGE', type: 'SUCCESS', message: `Restored state from ${new Date(snapshot.timestamp).toLocaleTimeString()}` });
+          addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'STORAGE', type: 'SUCCESS', message: `Restored state from ${new Date(snapshot.timestamp).toLocaleTimeString()}` });
       } else {
-          addLog({ id: 'boot-init', timestamp: Date.now(), source: 'STORAGE', type: 'INFO', message: 'No saved state found. Starting fresh.' });
+          addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'STORAGE', type: 'INFO', message: 'No saved state found. Starting fresh.' });
       }
       
       const journal = Persistence.loadJournal();
       if (journal && journal.length > 0) {
           setChangeHistory(journal);
-          addLog({ id: 'boot-journal', timestamp: Date.now(), source: 'STORAGE', type: 'INFO', message: `Loaded ${journal.length} records from Change Journal.` });
+          addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'STORAGE', type: 'INFO', message: `Loaded ${journal.length} records from Change Journal.` });
       }
 
       setIsLoaded(true);
   }, [addLog]);
 
-  // Save Snapshot on Update
-  useEffect(() => {
-      if (!isLoaded) return;
-      Persistence.save(appDef, context);
-  }, [appDef, context, isLoaded]);
+  // Debounced save functions to avoid excessive writes
+  const debouncedSaveSnapshot = useDebounce(
+      (def: AppDefinition, ctx: AppContext) => Persistence.save(def, ctx),
+      500
+  );
+  
+  const debouncedSaveJournal = useDebounce(
+      (journal: ChangeRecord[]) => {
+          if (journal.length > 0) Persistence.saveJournal(journal);
+      },
+      500
+  );
 
-  // Save Journal on Update
+  // Save Snapshot on Update (debounced)
   useEffect(() => {
       if (!isLoaded) return;
-      if (changeHistory.length > 0) {
-          Persistence.saveJournal(changeHistory);
-      }
-  }, [changeHistory, isLoaded]);
+      debouncedSaveSnapshot(appDef, context);
+  }, [appDef, context, isLoaded, debouncedSaveSnapshot]);
+
+  // Save Journal on Update (debounced)
+  useEffect(() => {
+      if (!isLoaded) return;
+      debouncedSaveJournal(changeHistory);
+  }, [changeHistory, isLoaded, debouncedSaveJournal]);
 
   // --- FAULT TOLERANCE ---
   const handleRuntimeError = useCallback((error: Error) => {
@@ -109,6 +145,178 @@ export default function App() {
       });
   }, [context, addLog]); // Context dependency ensures we have latest data for migration
 
+  // ============================================================================
+  // SIMULATION MODE - Shows every step of the AI flow without calling the API
+  // ============================================================================
+  const handleSimulate = async () => {
+    const testPrompt = prompt.trim() || "Add a counter with increment and decrement buttons";
+    
+    setIsSynthesizing(true);
+    setError(null);
+    setVerificationReport(null);
+    
+    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `━━━ SIMULATION MODE ━━━` });
+    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `User Prompt: "${testPrompt}"` });
+    
+    // Step 1: Show what we send to the AI
+    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 1: BUILD SYSTEM PROMPT ─────` });
+    
+    const systemPrompt = buildSystemPrompt(appDef, null, undefined);
+    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `System prompt length: ${systemPrompt.length} chars` });
+    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `System prompt (first 500 chars):\n${systemPrompt.substring(0, 500)}...` });
+    
+    // Step 2: Show the user message format
+    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 2: FORMAT REQUEST ─────` });
+    const userMessage = `USER REQUEST:\n"${testPrompt}"\n\nIMPORTANT: Respond with ONLY a complete JSON AppDefinition containing ALL required fields:\n- version (string)\n- initialContext (object)\n- pipelines (object)\n- machine (object with "initial" and "states")\n- view (object with "id", "type", and UI tree)\n- testVectors (array)\n\nNo markdown code blocks, just raw JSON.`;
+    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `User message:\n${userMessage}` });
+    
+    // Step 3: Show the mock response (what Claude SHOULD return)
+    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 3: MOCK AI RESPONSE ─────` });
+    
+    const mockProposal: AppDefinition = {
+      version: `v${new Date().toISOString().slice(0, 16).replace('T', '-')}`,
+      initialContext: {
+        count: 0
+      },
+      pipelines: {
+        increment: {
+          inputs: { currentCount: 'number' },
+          nodes: [
+            { id: 'add1', op: 'Math.Add', inputs: { a: '$currentCount', b: 1 } }
+          ],
+          output: 'add1'
+        },
+        decrement: {
+          inputs: { currentCount: 'number' },
+          nodes: [
+            { id: 'sub1', op: 'Math.Subtract', inputs: { a: '$currentCount', b: 1 } }
+          ],
+          output: 'sub1'
+        }
+      },
+      machine: {
+        initial: 'idle',
+        states: {
+          idle: {
+            on: {
+              INCREMENT: { actions: ['RUN:increment:count'] },
+              DECREMENT: { actions: ['RUN:decrement:count'] }
+            }
+          }
+        }
+      },
+      view: {
+        id: 'root',
+        type: 'container',
+        props: { className: 'flex flex-col items-center gap-4 p-8' },
+        children: [
+          {
+            id: 'title',
+            type: 'header',
+            props: { className: 'text-2xl font-bold text-white' },
+            textBinding: null,
+            children: [{ id: 'title-text', type: 'text', props: {}, children: [], textBinding: null }]
+          },
+          {
+            id: 'counter-display',
+            type: 'text',
+            props: { className: 'text-6xl font-mono text-indigo-400' },
+            textBinding: 'count',
+            children: []
+          },
+          {
+            id: 'button-row',
+            type: 'container',
+            props: { className: 'flex gap-4' },
+            children: [
+              {
+                id: 'dec-btn',
+                type: 'button',
+                props: { className: 'px-6 py-3 bg-red-600 hover:bg-red-500 rounded-lg text-xl', label: '−' },
+                onClick: 'DECREMENT',
+                children: []
+              },
+              {
+                id: 'inc-btn',
+                type: 'button',
+                props: { className: 'px-6 py-3 bg-green-600 hover:bg-green-500 rounded-lg text-xl', label: '+' },
+                onClick: 'INCREMENT',
+                children: []
+              }
+            ]
+          }
+        ]
+      },
+      testVectors: [
+        {
+          name: 'Increment increases count',
+          initialState: 'idle',
+          steps: [
+            { event: 'INCREMENT', expectState: 'idle', expectContext: { count: 1 } }
+          ]
+        },
+        {
+          name: 'Decrement decreases count',
+          initialState: 'idle', 
+          steps: [
+            { event: 'DECREMENT', expectState: 'idle', expectContext: { count: -1 } }
+          ]
+        }
+      ]
+    };
+    
+    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'SUCCESS', message: `Mock proposal generated: ${mockProposal.version}` });
+    console.log('[SIM] Full mock proposal:', JSON.stringify(mockProposal, null, 2));
+    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Proposal JSON logged to browser console` });
+    
+    // Step 4: Validation
+    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 4: VALIDATION ─────` });
+    
+    try {
+      const report = await verifyProposal(mockProposal);
+      setVerificationReport(report);
+      
+      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Structural checks: ${report.checks.structural.length}` });
+      report.checks.structural.forEach(c => {
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: c.status === 'PASS' ? 'SUCCESS' : 'ERROR', message: `  ${c.status}: ${c.message}` });
+      });
+      
+      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Semantic checks: ${report.checks.semantic.length}` });
+      report.checks.semantic.forEach(c => {
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: c.status === 'PASS' ? 'SUCCESS' : (c.status === 'WARN' ? 'WARN' : 'ERROR'), message: `  ${c.status}: ${c.message}` });
+      });
+      
+      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Honesty checks: ${report.checks.honesty.length}` });
+      report.checks.honesty.forEach(c => {
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: c.status === 'PASS' ? 'SUCCESS' : 'ERROR', message: `  ${c.status}: ${c.message}` });
+      });
+      
+      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: report.passed ? 'SUCCESS' : 'ERROR', message: `Final Score: ${report.score}/100 - ${report.passed ? 'PASSED' : 'FAILED'}` });
+      
+      // Step 5: If passed, show what would happen
+      if (report.passed) {
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 5: APPLY PROPOSAL ─────` });
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'SUCCESS', message: `Would update appDef and render new UI` });
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `View tree: ${mockProposal.view.type} with ${mockProposal.view.children?.length || 0} children` });
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `States: ${Object.keys(mockProposal.machine.states).join(', ')}` });
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Pipelines: ${Object.keys(mockProposal.pipelines || {}).join(', ')}` });
+        
+        // Actually apply it so we can see it work
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── APPLYING MOCK PROPOSAL ─────` });
+        setAppDef(mockProposal);
+        setContext(mockProposal.initialContext);
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'SUCCESS', message: `✓ Counter app is now live! Try clicking the buttons.` });
+      }
+      
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'ERROR', message: `Validation error: ${msg}` });
+    }
+    
+    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `━━━ SIMULATION COMPLETE ━━━` });
+    setIsSynthesizing(false);
+  };
+
 
   const handleSynthesize = async () => {
     if (!prompt.trim()) return;
@@ -120,15 +328,44 @@ export default function App() {
     addLog({ id: crypto.randomUUID(), timestamp: startTime, source: 'GUEST', type: 'INFO', message: `Analyzing intent: "${prompt}"...` });
 
     try {
-      // 1. Cognition Phase
-      const proposal = await generateAppProposal({ ...appDef, initialContext: context }, prompt);
+      // 1. Cognition Phase (with execution feedback for self-correction)
+      const feedback = extractExecutionFeedback(changeHistory);
+      if (feedback) {
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'GUEST', type: 'WARN', message: `Providing feedback about previous failure: ${feedback.failureType}` });
+      }
+      
+      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'GUEST', type: 'INFO', message: `Using AI provider: ${aiProvider.name} (${aiProvider.modelId})` });
+      
+      let proposal: AppDefinition;
+      try {
+        proposal = await aiProvider.generateProposal({ ...appDef, initialContext: context }, prompt, feedback);
+      } catch (aiError) {
+        const errorMsg = aiError instanceof Error ? aiError.message : 'Unknown AI error';
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'GUEST', type: 'ERROR', message: `AI Generation Failed: ${errorMsg}` });
+        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'GUEST', type: 'INFO', message: `Check browser console for raw AI response (search for [BEDROCK])` });
+        throw aiError;
+      }
+      
+      // Log the raw proposal for debugging
+      console.log('[AI PROPOSAL]', JSON.stringify(proposal, null, 2));
       addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'GUEST', type: 'INFO', message: `Proposal generated: v${proposal.version}` });
+      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'GUEST', type: 'INFO', message: `View type: ${proposal.view?.type}, States: ${Object.keys(proposal.machine?.states || {}).join(', ')}` });
 
       // 2. Verification Phase (The Gatekeeper)
       addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'INFO', message: `Running Trust Assurance Pipeline...` });
       
       const report = await verifyProposal(proposal);
       setVerificationReport(report);
+
+      // 2.5 Honesty Oracle - Semantic Attack Detection
+      const honestyResult = runHonestyOracle(prompt, proposal, appDef);
+      addLog({ 
+        id: crypto.randomUUID(), 
+        timestamp: Date.now(), 
+        source: 'VALIDATOR', 
+        type: honestyResult.passed ? (honestyResult.concerns.length > 0 ? 'WARN' : 'SUCCESS') : 'ERROR', 
+        message: formatHonestyReport(honestyResult)
+      });
 
       const diff = computeDiff(appDef, proposal);
       
@@ -181,8 +418,9 @@ export default function App() {
         setChangeHistory(prev => [record, ...prev]);
       }
 
-    } catch (e: any) {
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `Synthesis Error: ${e.message}` });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `Synthesis Error: ${message}` });
       setError("The Guest Intelligence failed to produce a valid response.");
     } finally {
       setIsSynthesizing(false);
@@ -356,7 +594,7 @@ export default function App() {
                             value={prompt}
                             onChange={(e) => setPrompt(e.target.value)}
                             placeholder="Describe a change (e.g., 'Add a task list', 'Make the background red')..."
-                            className="w-full bg-black border border-zinc-700 rounded-lg p-3 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 resize-none h-24"
+                            className="w-full bg-black border border-zinc-700 rounded-lg p-3 pb-8 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 resize-none h-24"
                             disabled={isSynthesizing}
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -365,9 +603,30 @@ export default function App() {
                                 }
                             }}
                         />
+                        <div className="absolute bottom-2 left-3 text-[10px] text-zinc-600 flex items-center gap-1">
+                            <kbd className="px-1 py-0.5 bg-zinc-800 rounded text-zinc-500 font-mono">⏎</kbd>
+                            <span>to submit</span>
+                            <span className="mx-1 text-zinc-700">•</span>
+                            <kbd className="px-1 py-0.5 bg-zinc-800 rounded text-zinc-500 font-mono">⇧⏎</kbd>
+                            <span>for newline</span>
+                        </div>
+                        {/* Simulate button - tests the flow without calling AI */}
+                        <button
+                            onClick={handleSimulate}
+                            disabled={isSynthesizing}
+                            title="Simulate: Test the flow with a mock response (no API call)"
+                            className={`absolute bottom-3 right-14 p-2 rounded-md flex items-center justify-center transition-all ${
+                                isSynthesizing 
+                                ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed' 
+                                : 'bg-amber-600 text-white hover:bg-amber-500 shadow-lg shadow-amber-500/20'
+                            }`}
+                        >
+                            <Microscope className="w-4 h-4" />
+                        </button>
                         <button
                             onClick={handleSynthesize}
                             disabled={isSynthesizing || !prompt.trim()}
+                            title="Synthesize: Call AI to generate proposal"
                             className={`absolute bottom-3 right-3 p-2 rounded-md flex items-center justify-center transition-all ${
                                 isSynthesizing 
                                 ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed' 

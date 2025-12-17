@@ -7,13 +7,15 @@ export type NodeType =
   | 'container' | 'text' | 'button' | 'input' | 'header' | 'list' | 'tabs' | 'card' 
   | 'element' | 'icon' | 'chart' | 'clock' 
   | 'file-input' | 'slider' | 'canvas'
-  | 'text-input' | 'text-display'; 
+  | 'text-input' | 'text-display'
+  // HOST PRIMITIVES - Safe overlay patterns (use instead of fixed/absolute positioning)
+  | 'modal' | 'toast' | 'dropdown' | 'tooltip' | 'popover'; 
 
 export interface ViewNode {
   id: string;
   type: NodeType;
   tag?: string; 
-  props?: Record<string, any>;
+  props?: Record<string, unknown>;
   children?: ViewNode[];
   textBinding?: string; 
   valueBinding?: string; 
@@ -50,10 +52,10 @@ export type OperatorType =
   // Audio (OfflineAudioContext)
   | 'Audio.FFT' | 'Audio.PeakDetect'
   // Lists & Logic (Control Flow)
-  | 'List.Map' | 'List.Filter' | 'List.Sort' | 'List.Take'
+  | 'List.Map' | 'List.Filter' | 'List.Sort' | 'List.Take' | 'List.Reduce' | 'List.FoldN'
   | 'Logic.If' | 'Utility.JsonPath';
 
-export type DataType = 'string' | 'number' | 'boolean' | 'json' | 'image' | 'audio' | 'any';
+export type DataType = 'string' | 'number' | 'boolean' | 'json' | 'image' | 'audio' | 'array' | 'any';
 
 export interface PortSpec {
   name: string;
@@ -78,6 +80,14 @@ export interface PipelineNode {
 export interface PipelineBudget {
   maxOps: number;     // e.g. 50 nodes
   maxTimeMs: number;  // e.g. 1000ms
+  maxBytes?: number;  // Maximum bytes in flight
+  maxOutputBytes?: number; // Maximum output size
+}
+
+export interface PipelineProvenance {
+  operatorLibraryVersion: string;
+  rationale?: string;    // AI's explanation for this pipeline design
+  createdAt?: number;    // Timestamp
 }
 
 export interface PipelineDefinition {
@@ -85,6 +95,20 @@ export interface PipelineDefinition {
   nodes: PipelineNode[];
   output: string; // The node ID whose output is the result
   budget?: PipelineBudget;
+  provenance?: PipelineProvenance;
+}
+
+// Tool Binding: Explicit mapping between UI and Pipeline
+export interface ToolPortBinding {
+  uiNodeId: string;      // The UI node (e.g., "file-input-1")
+  pipelinePort: string;  // The pipeline input/output key (e.g., "rawImg")
+  direction: 'input' | 'output';
+}
+
+export interface ToolBindingDefinition {
+  pipelineId: string;
+  bindings: ToolPortBinding[];
+  triggerEvent?: string;  // Event that runs this tool (e.g., "APPLY")
 }
 
 // Observability & Tracing
@@ -116,6 +140,7 @@ export interface AppDefinition {
   machine: MachineDefinition;
   actors?: Record<string, MachineDefinition>;
   pipelines?: Record<string, PipelineDefinition>; // Registry of tools
+  toolBindings?: ToolBindingDefinition[];         // Explicit UI ↔ Pipeline mappings
   initialContext: AppContext;
   testVectors?: TestVector[];
 }
@@ -126,7 +151,7 @@ export interface TestVector {
   initialState: string;
   steps: {
     event: string;
-    payload?: any;
+    payload?: unknown;
     expectState?: string;
     expectContextKeys?: string[];
   }[];
@@ -136,7 +161,7 @@ export interface CheckResult {
   name: string;
   status: 'PASS' | 'FAIL' | 'WARN';
   message: string;
-  evidence?: any;
+  evidence?: Record<string, unknown>;
   recommendedFix?: string;
 }
 
@@ -154,10 +179,10 @@ export interface VerificationReport {
 export interface SystemLog {
   id: string;
   timestamp: number;
-  source: 'HOST' | 'GUEST' | 'VALIDATOR' | 'STORAGE' | 'HARNESS';
+  source: 'HOST' | 'GUEST' | 'VALIDATOR' | 'STORAGE' | 'HARNESS' | 'KERNEL';
   type: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
   message: string;
-  payload?: any;
+  payload?: unknown;
 }
 
 export interface InteractionTrace {

@@ -29,28 +29,33 @@ export const LabConsole: React.FC<LabConsoleProps> = ({ metrics, history, intera
       setEvalReport(null);
       
       try {
-          setEvalStatus('1/3: Running Adversarial Safety Suite (Prompt Injection)...');
-          await new Promise(r => setTimeout(r, 500)); // Visual pacing
+          setEvalStatus('1/4: Running Golden Path Pipeline Tests...');
+          await new Promise(r => setTimeout(r, 300)); // Visual pacing
+          const goldenPath = await EvaluationHarness.runGoldenPathTests();
+          
+          setEvalStatus('2/4: Running Adversarial Safety Suite (Prompt Injection)...');
+          await new Promise(r => setTimeout(r, 300));
           const safety = await EvaluationHarness.runSafetyTests();
           
-          setEvalStatus('2/3: Booting Isolated WASM Kernel (Downloading Runtime)...');
+          setEvalStatus('3/4: Booting Isolated WASM Kernel (Testing Fuel Limits)...');
           // Note: This step might take a few seconds on first run
           const liveness = await EvaluationHarness.runLivenessTests(INITIAL_APP.initialContext, INITIAL_APP);
 
-          setEvalStatus('3/3: Verifying Bidirectional Lens Laws...');
-          await new Promise(r => setTimeout(r, 500));
+          setEvalStatus('4/4: Verifying Bidirectional Lens Laws...');
+          await new Promise(r => setTimeout(r, 300));
           const correctness = EvaluationHarness.runCorrectnessTests(INITIAL_APP.initialContext, INITIAL_APP);
           
           setEvalStatus('Finalizing Report...');
-          const all = [...safety, ...liveness, ...correctness];
+          const all = [...goldenPath, ...safety, ...liveness, ...correctness];
           setEvalReport({
               timestamp: Date.now(),
               results: all,
               passed: all.every(r => r.status === 'PASS')
           });
-      } catch (e: any) {
+      } catch (e: unknown) {
+          const message = e instanceof Error ? e.message : 'Unknown error';
           console.error("Evaluation Suite Crash:", e);
-          setEvalError(e.message || "Unknown error during evaluation");
+          setEvalError(message);
       } finally {
           setIsRunningEval(false);
           setEvalStatus('');

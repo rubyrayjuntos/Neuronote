@@ -165,7 +165,8 @@ export function verifyLensLaws(source: AppContext, nextDef: AppDefinition): { sa
         }
         
         return { satisfied: true, score: 100 };
-    } catch (e: any) {
-        return { satisfied: false, score: 0, violation: e.message };
+    } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : 'Unknown error';
+        return { satisfied: false, score: 0, violation: message };
     }
 }

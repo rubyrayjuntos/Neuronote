@@ -1,5 +1,5 @@
 import { AppDefinition, ViewNode, VerificationReport, CheckResult, TestVector, MachineDefinition, PipelineDefinition, PipelineNode } from '../types';
-import { OPERATOR_REGISTRY } from '../constants';
+import { OPERATOR_REGISTRY, MAX_TREE_DEPTH, MAX_PIPELINE_NODES } from '../constants';
 
 /**
  * 7. Verification & Trust Assurance
@@ -11,9 +11,6 @@ const OPCODES = ['SET', 'APPEND', 'RESET', 'TOGGLE', 'SPAWN', 'DELETE', 'ASSIGN'
 // THE STANDARD LIBRARY ALLOWLIST
 const ALLOWED_OPS = Object.keys(OPERATOR_REGISTRY);
 
-const MAX_TREE_DEPTH = 50; 
-const MAX_PIPELINE_NODES = 50; // Prevention of Graph Bombs
-
 const SAFE_TAGS = [
     'div', 'span', 'p', 'article', 'section', 'main', 'aside', 'header', 'footer', 'nav',
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
@@ -24,6 +21,54 @@ const SAFE_TAGS = [
     'hr', 'br', 'pre', 'code', 'blockquote'
 ];
 
+// DANGEROUS PROPS that could enable XSS or phishing attacks
+const FORBIDDEN_PROPS = [
+    'dangerouslySetInnerHTML',  // XSS vector
+    'innerHTML',                 // XSS vector
+    'outerHTML',                 // XSS vector
+    'srcdoc',                    // iframe XSS
+    'formAction',                // Form hijacking
+    'action',                    // Form action hijacking
+];
+
+// Props that could be used for overlay/phishing attacks - BLOCKED (not warned)
+const FORBIDDEN_STYLE_PROPS = [
+    'position',     // fixed/absolute positioning for overlays
+    'zIndex',       // Layer manipulation
+    'z-index',      // CSS version
+    'opacity',      // Hidden elements for exfiltration
+    'visibility',   // Hidden elements
+];
+
+// Event handlers that shouldn't be string values (React ignores but still risky)
+const EVENT_HANDLER_PATTERN = /^on[A-Z]/;
+
+// URL validation: Only allow relative paths, data: for images from file-input, or explicit allowlist
+const ALLOWED_URL_PATTERNS = [
+    /^\/[^/]/,                          // Relative path starting with /
+    /^\.?\.\//,                         // Relative path starting with ./ or ../
+    /^#/,                               // Hash links
+    /^data:image\/(png|jpeg|gif|webp|svg)/i,  // Data URLs for images only (from file-input)
+];
+
+// Tailwind arbitrary value syntax - potential CSS injection
+const TAILWIND_ARBITRARY_PATTERN = /\[.*\]/;
+
+// Tailwind classes that enable overlays or hidden content - BLOCKED
+const FORBIDDEN_TAILWIND_CLASSES = [
+    'fixed',        // Overlay positioning
+    'absolute',     // Overlay positioning  
+    'sticky',       // Can create overlays
+    'inset-0',      // Full-screen overlay
+    'inset-x-0',    // Horizontal overlay
+    'inset-y-0',    // Vertical overlay
+    'z-50', 'z-40', 'z-30', 'z-20', 'z-10',  // High z-index
+    'opacity-0',    // Hidden content
+    'invisible',    // Hidden content
+    'hidden',       // Hidden content (though this just hides)
+    'sr-only',      // Screen-reader only (hidden visually)
+];
+
 // --- PHASE A: STRUCTURAL VALIDATION ---
 
 function validateStructure(node: ViewNode, errors: CheckResult[], depth: number = 0) {
@@ -31,7 +76,9 @@ function validateStructure(node: ViewNode, errors: CheckResult[], depth: number 
       'container', 'text', 'button', 'input', 'header', 'list', 'tabs', 'card', 
       'element', 'icon', 'chart', 'clock',
       'file-input', 'slider', 'canvas',
-      'text-input', 'text-display'
+      'text-input', 'text-display',
+      // HOST PRIMITIVES for controlled overlays (safe alternatives)
+      'modal', 'toast', 'dropdown', 'tooltip', 'popover'
   ];
   
   if (depth > MAX_TREE_DEPTH) {
@@ -69,7 +116,8 @@ function validateStructure(node: ViewNode, errors: CheckResult[], depth: number 
       }
   }
 
-  if (node.onClick && OPCODES.some(op => node.onClick!.startsWith(op + ':'))) {
+  const clickHandler = node.onClick;
+  if (clickHandler && OPCODES.some(op => clickHandler.startsWith(op + ':'))) {
       errors.push({
           name: 'Separation of Concerns',
           status: 'FAIL',
@@ -79,8 +127,110 @@ function validateStructure(node: ViewNode, errors: CheckResult[], depth: number 
       });
   }
 
+  // PROP SANITIZATION - Check for dangerous props
+  if (node.props) {
+    validateProps(node.id, node.props, errors);
+  }
+
   if (node.children) {
     node.children.forEach(child => validateStructure(child, errors, depth + 1));
+  }
+}
+
+/**
+ * Validate props for security risks.
+ * Checks for XSS vectors, overlay attacks, and data exfiltration.
+ * 
+ * Security Model:
+ * - FAIL on any prop that could enable XSS, phishing, or data exfiltration
+ * - Block all external URLs (relative paths only, or data: for images)
+ * - Block Tailwind arbitrary values (CSS injection vector)
+ * - Block positioning/visibility that could create overlays or hidden elements
+ * - Use Host primitives (modal, toast, etc.) for controlled overlay patterns
+ */
+function validateProps(nodeId: string, props: Record<string, unknown>, errors: CheckResult[]) {
+  for (const [key, value] of Object.entries(props)) {
+    // 1. Forbidden props (XSS vectors)
+    if (FORBIDDEN_PROPS.includes(key)) {
+      errors.push({
+        name: 'Prop Security',
+        status: 'FAIL',
+        message: `Forbidden prop '${key}' on node '${nodeId}'. This is a potential XSS vector.`,
+        evidence: { nodeId, prop: key },
+        recommendedFix: `Remove '${key}' prop. Use textBinding for dynamic content.`
+      });
+    }
+
+    // 2. Event handlers as strings (potential XSS)
+    if (EVENT_HANDLER_PATTERN.test(key) && typeof value === 'string') {
+      errors.push({
+        name: 'Event Handler Security',
+        status: 'FAIL',
+        message: `Event handler '${key}' on node '${nodeId}' has string value. This could be an XSS attempt.`,
+        evidence: { nodeId, prop: key, value },
+        recommendedFix: `Use 'onClick' or 'onChange' bindings instead of inline handlers.`
+      });
+    }
+
+    // 3. URL validation: Block external URLs (relative paths only)
+    if ((key === 'href' || key === 'src') && typeof value === 'string') {
+      const isAllowed = ALLOWED_URL_PATTERNS.some(pattern => pattern.test(value));
+      if (!isAllowed && value.length > 0) {
+        errors.push({
+          name: 'URL Security',
+          status: 'FAIL',
+          message: `External URL blocked in '${key}' on node '${nodeId}'. Only relative paths allowed.`,
+          evidence: { nodeId, prop: key, value: value.substring(0, 80) },
+          recommendedFix: `Use relative paths (e.g., '/images/logo.png') or data URLs from file-input.`
+        });
+      }
+    }
+
+    // 4. Style object: Block positioning and visibility properties
+    if (key === 'style' && typeof value === 'object' && value !== null) {
+      const styleObj = value as Record<string, unknown>;
+      for (const styleProp of FORBIDDEN_STYLE_PROPS) {
+        if (styleProp in styleObj) {
+          errors.push({
+            name: 'Style Security',
+            status: 'FAIL',
+            message: `Forbidden style property '${styleProp}' on node '${nodeId}'. Use Host primitives (modal, toast) for overlays.`,
+            evidence: { nodeId, style: styleProp, value: styleObj[styleProp] },
+            recommendedFix: `Remove '${styleProp}' from style. Use 'modal' or 'toast' type for overlay UI.`
+          });
+        }
+      }
+    }
+
+    // 5. Tailwind className validation
+    if (key === 'className' && typeof value === 'string') {
+      // 5a. Block arbitrary values (CSS injection vector)
+      if (TAILWIND_ARBITRARY_PATTERN.test(value)) {
+        const matches = value.match(/\[[^\]]+\]/g) || [];
+        errors.push({
+          name: 'Class Security',
+          status: 'FAIL',
+          message: `Tailwind arbitrary values blocked on node '${nodeId}': ${matches.join(', ')}`,
+          evidence: { nodeId, className: value, arbitraryValues: matches },
+          recommendedFix: `Use standard Tailwind classes only. Arbitrary values like [color:red] can inject CSS.`
+        });
+      }
+
+      // 5b. Block forbidden positioning/visibility classes
+      const classes = value.split(/\s+/);
+      const forbidden = classes.filter(cls => 
+        FORBIDDEN_TAILWIND_CLASSES.some(fc => cls === fc || cls.startsWith(fc + '-'))
+      );
+      if (forbidden.length > 0) {
+        errors.push({
+          name: 'Class Security',
+          status: 'FAIL',
+          message: `Forbidden Tailwind classes on node '${nodeId}': ${forbidden.join(', ')}`,
+          evidence: { nodeId, forbiddenClasses: forbidden },
+          recommendedFix: `Remove positioning/visibility classes. Use 'modal', 'toast', or 'popover' type for overlay UI.`
+        });
+      }
+    }
   }
 }
 
