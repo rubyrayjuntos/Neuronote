@@ -8,6 +8,7 @@ import {
   MAX_PIPELINE_BYTES,
   MAX_OUTPUT_BYTES
 } from "../constants";
+import { generateTier1OperatorsSource } from "../operators";
 
 /**
  * THE LOGIC KERNEL (Guest Code)
@@ -334,106 +335,32 @@ function performRealFFT(waveform, bins) {
 }
 
 /**
- * OPERATOR IMPLEMENTATIONS
+ * TIER 2 OPERATOR IMPLEMENTATIONS (Worker-specific APIs)
  * 
- * IMPORTANT: This must stay in sync with operators/registry.ts
- * The registry is the source of truth for schemas/types.
- * These implementations run inside the Worker (needed for OffscreenCanvas, etc.)
+ * These operators use OffscreenCanvas, AudioContext, etc. which only exist in Workers.
+ * They are defined here, not in the registry, because the registry can't serialize
+ * Worker-specific APIs.
  * 
- * Tier 1 (sync): Text, Math, List, Logic, Utility
- * Tier 2 (async): Image, Audio (use OffscreenCanvas/AudioContext)
+ * Tier 1 operators (sync, pure) are injected from operators/registry.ts at boot time.
  */
-const OPERATORS = {
-    // TEXT OPS
-    'Text.ToUpper': (inputs) => (String(inputs[0] || '')).toUpperCase(),
-    'Text.Length': (inputs) => (String(inputs[0] || '').length),
-    'Text.RegexMatch': (inputs) => {
-        const str = String(inputs[0] || '');
-        const pattern = String(inputs[1] || '');
-        const match = str.match(new RegExp(pattern));
-        return match ? match[0] : '';
-    },
-    'Text.Join': (inputs) => {
-        const arr = Array.isArray(inputs[0]) ? inputs[0] : [inputs[0]];
-        return arr.join(inputs[1] || ', ');
-    },
-    
-    // MATH OPS
-    'Math.Add': (inputs) => Number(inputs[0]) + Number(inputs[1]),
-    'Math.Subtract': (inputs) => Number(inputs[0]) - Number(inputs[1]),
-    'Math.Multiply': (inputs) => Number(inputs[0]) * Number(inputs[1]),
-    'Math.Divide': (inputs) => Number(inputs[0]) / (Number(inputs[1]) || 1),
-    'Math.Threshold': (inputs) => Number(inputs[0]) > Number(inputs[1]) ? 1 : 0,
-
-    // LOGIC
-    'Logic.If': (inputs) => inputs[0] ? inputs[1] : inputs[2],
-    'Utility.JsonPath': (inputs) => {
-        const obj = inputs[0];
-        const path = String(inputs[1] || '');
-        return path.split('.').reduce((o, k) => (o || {})[k], obj);
-    },
-
-    // LIST OPS
-    'List.Map': (inputs) => {
-         const arr = Array.isArray(inputs[0]) ? inputs[0] : [];
-         return arr.map(x => String(x));
-    },
-    'List.Filter': (inputs) => {
-         const arr = Array.isArray(inputs[0]) ? inputs[0] : [];
-         return arr.filter(x => !!x);
-    },
-    'List.Sort': (inputs) => {
-         const arr = Array.isArray(inputs[0]) ? [...inputs[0]] : [];
-         return arr.sort();
-    },
-    'List.Take': (inputs) => {
-        const arr = Array.isArray(inputs[0]) ? inputs[0] : [];
-        const n = Number(inputs[1]) || 0;
-        return arr.slice(0, n);
-    },
-    'List.Reduce': (inputs) => {
-        const arr = Array.isArray(inputs[0]) ? inputs[0] : [];
-        const initial = inputs[1];
-        const operation = String(inputs[2] || '').toLowerCase();
-        
-        switch (operation) {
-            case 'sum':
-                return arr.reduce((acc, x) => Number(acc) + Number(x), Number(initial) || 0);
-            case 'product':
-                return arr.reduce((acc, x) => Number(acc) * Number(x), Number(initial) || 1);
-            case 'concat':
-                return arr.reduce((acc, x) => String(acc) + String(x), String(initial) || '');
-            case 'min':
-                return arr.reduce((acc, x) => Math.min(Number(acc), Number(x)), Number(initial) || Infinity);
-            case 'max':
-                return arr.reduce((acc, x) => Math.max(Number(acc), Number(x)), Number(initial) || -Infinity);
-            case 'count':
-                return arr.length;
-            default:
-                return initial;
-        }
-    },
-    'List.FoldN': (inputs) => {
-        const MAX_FOLD_ITERATIONS = 1000;
-        const n = Math.min(MAX_FOLD_ITERATIONS, Math.max(0, Math.floor(Number(inputs[0]) || 0)));
-        const initial = Number(inputs[1]) || 0;
-        const step = Number(inputs[2]) || 0;
-        
-        if (step === 0) return initial;
-        return initial + (step * n);
-    },
-
-    // IMAGE OPS (Async)
+const TIER2_OPERATORS = {
+    // IMAGE OPS (Async - use OffscreenCanvas)
     'Image.Grayscale': async (inputs) => processImage(inputs[0], 'grayscale'),
     'Image.Invert': async (inputs) => processImage(inputs[0], 'invert'),
     'Image.EdgeDetect': async (inputs) => processImage(inputs[0], 'edge'),
     'Image.Resize': async (inputs) => processImage(inputs[0], 'resize'),
     'Image.Threshold': async (inputs) => processImage(inputs[0], 'threshold'),
 
-    // AUDIO OPS (Real)
+    // AUDIO OPS (Async - use AudioContext)
     'Audio.FFT': async (inputs) => processAudio(inputs[0], 'fft'),
     'Audio.PeakDetect': async (inputs) => processAudio(inputs[0], 'peak')
 };
+
+// Tier 1 operators are injected here at boot time from operators/registry.ts
+/* TIER1_OPERATORS_INJECTION_POINT */
+
+// Merge Tier 1 (injected) and Tier 2 (Worker APIs) into unified OPERATORS map
+const OPERATORS = { ...TIER1_OPERATORS, ...TIER2_OPERATORS };
 
 // Topological Sort (Kahn's Algorithm)
 function getExecutionOrder(nodes) {
@@ -750,7 +677,17 @@ export class WasmKernel {
 
   async init(context: AppContext, definition: AppDefinition): Promise<void> {
     this.dispose();
-    const blob = new Blob([WORKER_BLOB], { type: "application/javascript" });
+    
+    // Generate Tier 1 operators from the registry (single source of truth)
+    const tier1OperatorsCode = generateTier1OperatorsSource();
+    
+    // Inject Tier 1 operators into the Worker blob
+    const workerCode = WORKER_BLOB.replace(
+      '/* TIER1_OPERATORS_INJECTION_POINT */',
+      tier1OperatorsCode
+    );
+    
+    const blob = new Blob([workerCode], { type: "application/javascript" });
     const url = URL.createObjectURL(blob);
     this.worker = new Worker(url, { type: "module" });
     

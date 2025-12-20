@@ -31,81 +31,163 @@ function validateAppDefinitionShape(obj: unknown): obj is AppDefinition {
 }
 
 /**
+ * JSON Schema for AppDefinition - used by AI to ensure correct output format.
+ * This is the single source of truth for the AI response format.
+ */
+const APP_DEFINITION_SCHEMA = {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AppDefinition",
+  "type": "object",
+  "required": ["version", "initialContext", "pipelines", "machine", "view", "testVectors"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { 
+      "type": "string", 
+      "pattern": "^v\\d{4}-\\d{2}-\\d{2}-\\d{2}:\\d{2}$",
+      "description": "Version string like v2025-12-16-14:30" 
+    },
+    "initialContext": { 
+      "type": "object", 
+      "description": "Initial state values (key-value pairs)" 
+    },
+    "pipelines": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["inputs", "nodes", "output"],
+        "properties": {
+          "inputs": { 
+            "type": "object",
+            "description": "REQUIRED: Declare ALL context keys used with $ prefix. E.g. {\"count\": \"number\"} if using $count"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "op", "inputs"],
+              "properties": {
+                "id": { "type": "string" },
+                "op": { "type": "string" },
+                "inputs": { "type": "object" }
+              }
+            }
+          },
+          "output": { "type": "string", "description": "ID of the node returning result" }
+        }
+      }
+    },
+    "machine": {
+      "type": "object",
+      "required": ["initial", "states"],
+      "properties": {
+        "initial": { "type": "string" },
+        "states": { "type": "object" }
+      }
+    },
+    "view": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["container", "text", "button", "input", "file-input", "slider", "canvas", "chart", "list"] },
+        "props": { "type": "object" },
+        "children": { "type": "array" },
+        "textBinding": { "type": "string" },
+        "valueBinding": { "type": "string" },
+        "onClick": { "type": "string" }
+      }
+    },
+    "testVectors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "initialState", "steps"],
+        "properties": {
+          "name": { "type": "string" },
+          "initialState": { "type": "string" },
+          "steps": { "type": "array" }
+        }
+      }
+    }
+  }
+};
+
+/**
  * Build the system instruction prompt for NeuroNote.
- * This is shared across providers but can be customized.
+ * Follows best practices for JSON-only AI responses:
+ * 1. Explicit JSON Schema
+ * 2. Clear delimiters
+ * 3. Concrete examples
+ * 4. Error handling format
  */
 export function buildSystemPrompt(
   currentDef: AppDefinition,
   feedback?: ExecutionFeedback | null,
   additions?: string
 ): string {
+  const versionExample = `v${new Date().toISOString().slice(0, 16).replace('T', '-')}`;
+  
   // Build feedback section if previous attempt failed
   const feedbackSection = feedback ? `
-PREVIOUS ATTEMPT FAILED:
-⚠️ Your last proposal (${feedback.failedVersion}) was ${feedback.failureType === 'rolled_back' ? 'accepted but caused a runtime error and was rolled back' : 'rejected by the Gatekeeper'}.
-Error: ${feedback.errorMessage}
-${feedback.validationFailures && feedback.validationFailures.length > 0 ? `
-Specific failures:
-${feedback.validationFailures.map(f => `  - ${f}`).join('\n')}
-` : ''}
-INSTRUCTION: Analyze the failure and fix the issue in your next proposal. Do NOT repeat the same mistake.
+<<<VALIDATION_ERROR>>>
+Your last response failed validation:
+- Version: ${feedback.failedVersion}
+- Error: ${feedback.errorMessage}
+${feedback.validationFailures?.length ? feedback.validationFailures.map(f => `- ${f}`).join('\n') : ''}
+Fix this in your next response.
+<<<END_VALIDATION_ERROR>>>
 ` : '';
 
   const customAdditions = additions ? `\n${additions}\n` : '';
 
-  return `
-You are the Guest Scientist for NeuroNote.
-Your goal: Architect "Dataflow Tools" by composing verified primitives.
-You DO NOT write code. You define JSON schemas (Graphs) that the Host executes.
+  return `You are a JSON-only API for NeuroNote. Respond ONLY with a valid JSON object matching the schema below.
+Do NOT wrap the JSON in markdown fences, code blocks, or add any explanation text.
+The very first character of your reply must be { and the last must be }.
 
-CRITICAL: You must provide 'testVectors' to prove your logic works before I execute it.
+<<<SCHEMA>>>
+${JSON.stringify(APP_DEFINITION_SCHEMA, null, 2)}
+<<<END_SCHEMA>>>
+
+<<<CRITICAL_RULES>>>
+PIPELINE INPUT DECLARATIONS:
+Every "$variableName" in node inputs MUST be declared in that pipeline's "inputs" object.
+- "$foo" in a node → requires "foo": "<type>" in inputs
+- "@nodeId" references another node's output (no declaration needed)
+- Literal values (numbers, strings, booleans) need no declaration
+
+VALID: { "inputs": { "count": "number" }, "nodes": [{ "id": "n1", "op": "Math.Add", "inputs": { "a": "$count", "b": 1 } }] }
+INVALID: { "inputs": {}, "nodes": [{ "id": "n1", "op": "Math.Add", "inputs": { "a": "$count", "b": 1 } }] }
+         ↑ FAILS: $count used but not declared in inputs
+
+VIEW NODES: Every view node must have "id", "type", "props", "children" (children can be empty array []).
+
+ACTIONS: Use "RUN:pipelineName:outputKey" to run pipeline and store result, "RESET:key" to reset to initial value.
+<<<END_CRITICAL_RULES>>>
 ${feedbackSection}
 ${customAdditions}
-
-OUTPUT INTERFACE:
-interface AppDefinition {
-  version: string;
-  initialContext: Record<string, any>;
-  pipelines: Record<string, PipelineDefinition>; // Registry of Computation Graphs
-  machine: MachineDefinition; 
-  view: ViewNode;
-  testVectors: TestVector[]; 
-}
-
-interface PipelineDefinition {
-  inputs: Record<string, DataType>; // REQUIRED: Declare expected context inputs with types
-  nodes: { 
-     id: string; 
-     op: string; 
-     inputs: Record<string, string | number | boolean>; // "$var", "@nodeId", or literal
-  }[];
-  output: string; // ID of the node returning result
-  budget?: { maxOps: number; maxTimeMs: number }; // Optional resource limits
-}
-
-type DataType = 'string' | 'number' | 'boolean' | 'json' | 'image' | 'audio' | 'any';
-
-HOST OPERATOR LIBRARY (The Primitives):
-Compose these to build tools.
-
+<<<OPERATORS>>>
 ${generateOperatorDocs()}
 
-UI PRIMITIVES (Embodied I/O):
-- "file-input": Outputs DataURL to 'valueBinding'.
-- "slider": Outputs Number to 'valueBinding'.
-- "canvas": Renders DataURL (Image) or Array (Chart) from 'textBinding'.
-- "chart": Visualizes Array data from 'textBinding'.
+UI Types: container, text, button, input, file-input, slider, canvas, chart, list
+- input/slider/file-input: use "valueBinding" to bind to context key
+- text/canvas/chart/list: use "textBinding" to display context value
+- button: use "onClick" to trigger event
+<<<END_OPERATORS>>>
 
-EXAMPLE: IMAGE FILTER TOOL
+<<<EXAMPLE>>>
+User request: "add a task list"
+
+Correct JSON response:
 {
+  "version": "${versionExample}",
+  "initialContext": { "tasks": [], "newTask": "" },
   "pipelines": {
-    "filter_pipe": {
-      "inputs": { "rawImg": "image" },
+    "addTask": {
+      "inputs": { "tasks": "array", "newTask": "string" },
       "nodes": [
-        { "id": "n1", "op": "Image.Grayscale", "inputs": { "0": "$rawImg" } },
-        { "id": "n2", "op": "Image.Invert", "inputs": { "0": "@n1" } }
+        { "id": "n1", "op": "List.Append", "inputs": { "list": "$tasks", "item": "$newTask" } }
       ],
-      "output": "n2"
+      "output": "n1"
     }
   },
   "machine": {
@@ -113,36 +195,35 @@ EXAMPLE: IMAGE FILTER TOOL
     "states": {
       "idle": {
         "on": {
-          "APPLY": { "actions": ["RUN:filter_pipe:processedImg"] }
+          "ADD_TASK": { "actions": ["RUN:addTask:tasks", "RESET:newTask"] }
         }
       }
     }
   },
   "view": {
+    "id": "root",
     "type": "container",
+    "props": { "className": "flex flex-col gap-4 p-4" },
     "children": [
-      { "type": "file-input", "valueBinding": "rawImg" },
-      { "type": "button", "onClick": "APPLY", "props": { "label": "Apply Filter" } },
-      { "type": "canvas", "textBinding": "processedImg" }
+      { "id": "input", "type": "input", "valueBinding": "newTask", "props": { "placeholder": "New task..." }, "children": [] },
+      { "id": "add-btn", "type": "button", "onClick": "ADD_TASK", "props": { "label": "Add Task" }, "children": [] },
+      { "id": "list", "type": "list", "textBinding": "tasks", "props": {}, "children": [] }
     ]
   },
   "testVectors": [
-    {
-      "name": "Verify Pipeline Trigger",
-      "initialState": "idle",
-      "steps": [
-        { "event": "APPLY", "expectState": "idle", "expectContextKeys": ["processedImg"] }
-      ]
-    }
+    { "name": "Add task works", "initialState": "idle", "steps": [{ "event": "ADD_TASK", "expectState": "idle" }] }
   ]
 }
+<<<END_EXAMPLE>>>
 
-CURRENT APP STATE (for context):
-${JSON.stringify({ version: currentDef.version, contextKeys: Object.keys(currentDef.initialContext), stateCount: Object.keys(currentDef.machine.states).length }, null, 2)}
+<<<CONTEXT>>>
+Current app state: ${JSON.stringify({ version: currentDef.version, contextKeys: Object.keys(currentDef.initialContext), stateCount: Object.keys(currentDef.machine.states).length })}
+<<<END_CONTEXT>>>
 
-Generate the full AppDefinition JSON. Ensure all pipelines include 'inputs' declarations.
-Use a timestamp-based version format like "v${new Date().toISOString().slice(0, 16).replace('T', '-')}" (e.g., "v2025-12-15-20:30").
-`;
+If you cannot produce a valid AppDefinition, reply with exactly:
+{"error": "<brief reason>"}
+
+Now respond to the user request with a complete, valid JSON AppDefinition.`;
 }
 
 /**
@@ -175,9 +256,14 @@ export class GeminiProvider implements AIProviderWithCapabilities {
   ): Promise<AppDefinition> {
     const systemInstruction = buildSystemPrompt(currentDef, feedback, this.systemPromptAdditions);
 
-    const fullPrompt = `USER REQUEST:\n"${prompt}"\n`;
+    // Simple user prompt with delimiter (matching the format in system prompt example)
+    const fullPrompt = `<<<USER_REQUEST>>>
+${prompt}
+<<<END_USER_REQUEST>>>`;
 
     try {
+      console.log('[GEMINI] Sending request, system prompt length:', systemInstruction.length);
+      
       const response = await this.client.models.generateContent({
         model: this.modelId,
         contents: fullPrompt,
@@ -192,19 +278,24 @@ export class GeminiProvider implements AIProviderWithCapabilities {
         throw new Error("AI returned empty response");
       }
       
+      console.log('[GEMINI] Response received, length:', response.text.length);
+      
       // Parse with error handling
       let parsed: unknown;
       try {
         parsed = JSON.parse(response.text);
       } catch (parseError) {
+        console.error('[GEMINI] JSON parse failed:', response.text.substring(0, 500));
         throw new Error(`AI returned invalid JSON: ${parseError instanceof Error ? parseError.message : 'Parse failed'}`);
       }
       
       // Validate shape
       if (!validateAppDefinitionShape(parsed)) {
+        console.error('[GEMINI] Shape validation failed:', parsed);
         throw new Error("AI response missing required fields (version, initialContext, machine, view)");
       }
       
+      console.log('[GEMINI] Proposal validated successfully');
       return parsed;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';

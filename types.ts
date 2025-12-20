@@ -18,10 +18,13 @@ export interface ViewNode {
   props?: Record<string, unknown>;
   children?: ViewNode[];
   textBinding?: string; 
-  valueBinding?: string; 
+  valueBinding?: string;
+  binding?: string;  // Generic data binding (used by list, chart, etc.)
   onClick?: string;
   onChange?: string;
 }
+
+import { OPERATOR_REGISTRY } from "./operators";
 
 // 2. Machine Schema (The Logic Flow)
 export interface Transition {
@@ -42,18 +45,7 @@ export interface MachineDefinition {
 
 // 3. Dataflow Schema (The Computation Graph)
 // Layer 2: Dataflow Operators (Pure Semantics)
-export type OperatorType = 
-  // Text
-  | 'Text.ToUpper' | 'Text.RegexMatch' | 'Text.Join' | 'Text.Length'
-  // Math
-  | 'Math.Add' | 'Math.Subtract' | 'Math.Multiply' | 'Math.Divide' | 'Math.Threshold'
-  // Image (OffscreenCanvas)
-  | 'Image.Grayscale' | 'Image.Invert' | 'Image.EdgeDetect' | 'Image.Resize' | 'Image.Threshold'
-  // Audio (OfflineAudioContext)
-  | 'Audio.FFT' | 'Audio.PeakDetect'
-  // Lists & Logic (Control Flow)
-  | 'List.Map' | 'List.Filter' | 'List.Sort' | 'List.Take' | 'List.Reduce' | 'List.FoldN'
-  | 'Logic.If' | 'Utility.JsonPath';
+export type OperatorType = keyof typeof OPERATOR_REGISTRY;
 
 export type DataType = 'string' | 'number' | 'boolean' | 'json' | 'image' | 'audio' | 'array' | 'any';
 
@@ -90,12 +82,18 @@ export interface PipelineProvenance {
   createdAt?: number;    // Timestamp
 }
 
+export interface PipelineProperties {
+  /** If true, the entire pipeline can be run in reverse. Requires all operators to be invertible. */
+  invertible?: boolean;
+}
+
 export interface PipelineDefinition {
   inputs: Record<string, DataType>; // Expected inputs
   nodes: PipelineNode[];
   output: string; // The node ID whose output is the result
   budget?: PipelineBudget;
   provenance?: PipelineProvenance;
+  properties?: PipelineProperties;
 }
 
 // Tool Binding: Explicit mapping between UI and Pipeline
@@ -143,6 +141,7 @@ export interface AppDefinition {
   toolBindings?: ToolBindingDefinition[];         // Explicit UI ↔ Pipeline mappings
   initialContext: AppContext;
   testVectors?: TestVector[];
+  signature?: string;
 }
 
 // ... (Rest of types: TestVector, CheckResult, VerificationReport, etc.)

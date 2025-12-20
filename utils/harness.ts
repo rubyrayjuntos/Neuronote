@@ -3,6 +3,7 @@ import { verifyProposal } from './validator';
 import { verifyLensLaws } from './migration';
 import { WasmKernel } from '../services/WasmKernel';
 import { MAX_TREE_DEPTH } from '../constants';
+import { OPERATOR_REGISTRY } from '../operators';
 
 /**
  * APPENDIX A: Test Harness Controller
@@ -287,7 +288,7 @@ export class EvaluationHarness {
         try {
             // First verify the golden path app passes validation
             const validationStart = performance.now();
-            const report = await verifyProposal(GOLDEN_PATH_APP);
+            const report = await verifyProposal(GOLDEN_PATH_APP, OPERATOR_REGISTRY);
             
             results.push({
                 category: 'CORRECTNESS',
@@ -410,7 +411,7 @@ export class EvaluationHarness {
                     ...partialDef
                 } as AppDefinition;
 
-                const report = await verifyProposal(badProposal);
+                const report = await verifyProposal(badProposal, OPERATOR_REGISTRY);
                 
                 // WE EXPECT FAILURE (Rejection)
                 const passed = !report.passed; // Invert logic: If validator failed (rejected), we PASS the safety test

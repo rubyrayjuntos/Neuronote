@@ -3,6 +3,18 @@ import { AppDefinition, ViewNode, AppContext, SystemLog, InteractionTrace } from
 import { WasmKernel } from '../services/WasmKernel';
 import * as Icons from 'lucide-react';
 
+// UUID helper that works in all environments (including non-HTTPS)
+const generateUUID = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
 interface HostRuntimeProps {
   definition: AppDefinition;
   context: AppContext;
@@ -262,8 +274,10 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
   // Initialize WASM Kernel - only depends on definition identity
   useEffect(() => {
     let disposed = false;
+    console.log('[HostRuntime] Boot effect triggered, definition version:', definition?.version);
     
     const boot = async () => {
+       console.log('[HostRuntime] boot() starting...');
        setIsKernelReady(false);
        setGovernanceError(null);
        
@@ -272,21 +286,25 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
        kernelRef.current = kernel;
        
        try {
-           onLogRef.current({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'INFO', message: 'Booting WASM Sandbox...' });
+           console.log('[HostRuntime] About to call kernel.init()...');
+           onLogRef.current({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'INFO', message: 'Booting WASM Sandbox...' });
            await kernel.init(context, definition);
+           console.log('[HostRuntime] kernel.init() completed successfully');
            
            // Check if we were disposed during async boot
            if (disposed) {
+               console.log('[HostRuntime] Disposed during boot, cleaning up');
                kernel.dispose();
                return;
            }
            
            setIsKernelReady(true);
-           onLogRef.current({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: 'Sandbox Active. 32MB Cap.' });
+           onLogRef.current({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: 'Sandbox Active. 32MB Cap.' });
        } catch (e: unknown) {
+           console.error('[HostRuntime] Boot error:', e);
            if (disposed) return; // Ignore errors after disposal
            const message = e instanceof Error ? e.message : 'Unknown error';
-           onLogRef.current({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `Boot Failed: ${message}` });
+           onLogRef.current({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `Boot Failed: ${message}` });
            setGovernanceError(message);
        }
     };
@@ -309,13 +327,13 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
     kernelRef.current = kernel;
     
     try {
-      onLogRef.current({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'INFO', message: 'Restarting WASM Sandbox...' });
+      onLogRef.current({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'INFO', message: 'Restarting WASM Sandbox...' });
       await kernel.init(context, definition);
       setIsKernelReady(true);
-      onLogRef.current({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: 'Sandbox Restarted. 32MB Cap.' });
+      onLogRef.current({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: 'Sandbox Restarted. 32MB Cap.' });
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Unknown error';
-      onLogRef.current({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `Restart Failed: ${message}` });
+      onLogRef.current({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `Restart Failed: ${message}` });
       setGovernanceError(message);
     }
   }, [context, definition]);
@@ -325,7 +343,7 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
     if (!kernelRef.current || !isKernelReady) return;
 
     if (event !== 'TICK') {
-        onLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'INFO', message: `[${scopeId}] Event -> WASM: ${event}` });
+        onLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'INFO', message: `[${scopeId}] Event -> WASM: ${event}` });
     }
 
     try {
@@ -337,20 +355,20 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
         setContext(result.context);
         
         if (event !== 'TICK') {
-            onLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'INFO', message: `Computed in ${(end - start).toFixed(2)}ms` });
+            onLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'INFO', message: `Computed in ${(end - start).toFixed(2)}ms` });
             
             // Log Pipeline Traces if present
             if (result.traces && result.traces.length > 0) {
                  result.traces.forEach(trace => {
                      const statusIcon = trace.status === 'success' ? '✅' : '❌';
                      const msg = `Pipeline '${trace.pipelineId}': ${statusIcon} in ${trace.totalDurationMs.toFixed(2)}ms. Ops: ${trace.nodeTraces.length}`;
-                     onLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: trace.status === 'success' ? 'SUCCESS' : 'ERROR', message: msg, payload: trace });
+                     onLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: trace.status === 'success' ? 'SUCCESS' : 'ERROR', message: msg, payload: trace });
                  });
             }
         }
     } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : 'Unknown Error';
-        onLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `GOVERNANCE: ${msg}` });
+        onLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `GOVERNANCE: ${msg}` });
         if (msg.includes('terminated')) {
              setGovernanceError("Sandbox Timeout. Restarting...");
              restartKernel(); 
@@ -375,7 +393,14 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
   };
 
   const renderNode = (node: ViewNode, scopeId: string | 'root'): ReactNode => {
-    const { id, type, props = {}, children, textBinding, valueBinding, onClick, onChange } = node;
+    const { id, type, props = {}, children } = node;
+    
+    // Handle bindings from EITHER node level OR props (AI sometimes puts them in props)
+    const textBinding = node.textBinding || (props as any).textBinding;
+    const valueBinding = node.valueBinding || (props as any).valueBinding;
+    const onClick = node.onClick || (props as any).onClick;
+    const onChange = node.onChange || (props as any).onChange;
+    
     const actor = resolveActorRead(scopeId);
     if (!actor) return <div className="text-red-500 text-xs p-2">Dead Actor: {scopeId}</div>;
     const { data, state } = actor;
@@ -384,23 +409,45 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
     if (textBinding && data[textBinding] !== undefined) childrenContent = data[textBinding];
     else if (children && type !== 'list' && type !== 'tabs') childrenContent = children.map(child => <React.Fragment key={child.id}>{renderNode(child, scopeId)}</React.Fragment>);
 
-    const commonProps = { ...props };
+    // Transform props to React-compatible format
+    // Handle common CSS shorthand properties that AI might use
+    // Strip NeuroNote-specific props that shouldn't go to DOM
+    const { 
+      background, color, padding, margin, width, height, style: existingStyle,
+      textBinding: _tb, valueBinding: _vb, onClick: _oc, onChange: _och, // Strip these
+      text, label, binding, placeholder, // Also strip these UI-specific props
+      ...restProps 
+    } = props as Record<string, unknown>;
+    const computedStyle: React.CSSProperties = {
+      ...(existingStyle as React.CSSProperties || {}),
+      ...(background ? { backgroundColor: background as string } : {}),
+      ...(color ? { color: color as string } : {}),
+      ...(padding ? { padding: padding as string | number } : {}),
+      ...(margin ? { margin: margin as string | number } : {}),
+      ...(width ? { width: width as string | number } : {}),
+      ...(height ? { height: height as string | number } : {}),
+    };
+    const commonProps = { 
+      ...restProps,
+      ...(Object.keys(computedStyle).length > 0 ? { style: computedStyle } : {}),
+      ...(placeholder ? { placeholder: placeholder as string } : {}), // Re-add placeholder for inputs
+    };
     const nodeKey = id;
     const handleClick = (e: React.MouseEvent) => {
       e.stopPropagation();
-      onInteraction({ id: crypto.randomUUID(), timestamp: Date.now(), type: 'click', targetId: id, event: onClick || 'none' });
+      onInteraction({ id: generateUUID(), timestamp: Date.now(), type: 'click', targetId: id, event: onClick || 'none' });
       if (onClick) sendEvent(onClick, null, scopeId);
     };
 
     const handleInput = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       const val = e.target.value;
-      onInteraction({ id: crypto.randomUUID(), timestamp: Date.now(), type: 'input', targetId: id, event: onChange || 'UPDATE_CONTEXT' });
+      onInteraction({ id: generateUUID(), timestamp: Date.now(), type: 'input', targetId: id, event: onChange || 'UPDATE_CONTEXT' });
       if (valueBinding) sendEvent(`UPDATE_CONTEXT:${valueBinding}`, val, scopeId);
       if (onChange) sendEvent(onChange, val, scopeId);
     };
 
     const handleFileChange = (val: string) => {
-        onInteraction({ id: crypto.randomUUID(), timestamp: Date.now(), type: 'input', targetId: id, event: onChange || 'UPDATE_CONTEXT' });
+        onInteraction({ id: generateUUID(), timestamp: Date.now(), type: 'input', targetId: id, event: onChange || 'UPDATE_CONTEXT' });
         if (valueBinding) sendEvent(`UPDATE_CONTEXT:${valueBinding}`, val, scopeId);
         if (onChange) sendEvent(onChange, val, scopeId);
     };

@@ -14,7 +14,7 @@
  * 3. The AI automatically learns about it (prompt is generated)
  */
 
-import { OperatorDefinition, OperatorImpl } from './types';
+import { OperatorDefinition, OperatorImpl } from './types.ts';
 
 // ============================================================================
 // HELPER FUNCTIONS (Defensive wrappers for hostile inputs)
@@ -66,16 +66,38 @@ const TextToUpper: OperatorDefinition = {
   category: 'Text',
   inputs: [{ name: 'text', type: 'string' }],
   output: 'string',
-  description: 'Converts text to uppercase',
+  description: 'Converts text to uppercase. Requires clean input.',
   tier: 1,
   pure: true,
   async: false,
   properties: {
-    idempotent: true,      // ToUpper(ToUpper(x)) === ToUpper(x)
+    complexity: 1,
+    idempotent: true,
     bounded: true,
     deterministic: true,
+    inputTaint: 0, // Sensitive sink
+    outputTaint: 0,
   },
   impl: (inputs) => safeString(inputs[0]).toUpperCase(),
+};
+
+const TextToLower: OperatorDefinition = {
+  op: 'Text.ToLower',
+  category: 'Text',
+  inputs: [{ name: 'text', type: 'string' }],
+  output: 'string',
+  description: 'Converts text to lowercase.',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 1,
+    idempotent: true,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 0,
+  },
+  impl: (inputs) => safeString(inputs[0]).toLowerCase(),
 };
 
 const TextLength: OperatorDefinition = {
@@ -88,8 +110,10 @@ const TextLength: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
+    complexity: 1,
     bounded: true,
     deterministic: true,
+    outputTaint: 0, // Length is a clean number
   },
   impl: (inputs) => safeString(inputs[0]).length,
 };
@@ -102,14 +126,16 @@ const TextRegexMatch: OperatorDefinition = {
     { name: 'pattern', type: 'string' },
   ],
   output: 'string',
-  description: 'Extracts first regex match from text',
+  description: 'Extracts first regex match from text. Output is tainted.',
   example: "Text.RegexMatch('hello123', '\\d+') → '123'",
   tier: 1,
   pure: true,
   async: false,
   properties: {
+    complexity: 5,
     bounded: true,
     deterministic: true,
+    outputTaint: 2,
   },
   impl: (inputs) => {
     const str = safeString(inputs[0]);
@@ -131,14 +157,16 @@ const TextJoin: OperatorDefinition = {
     { name: 'separator', type: 'string' },
   ],
   output: 'string',
-  description: 'Joins array elements into text with separator',
+  description: 'Joins array elements into text with separator. Output is tainted.',
   example: "Text.Join(['a', 'b', 'c'], '-') → 'a-b-c'",
   tier: 1,
   pure: true,
   async: false,
   properties: {
+    complexity: 5,
     bounded: true,
     deterministic: true,
+    outputTaint: 2, // Joining can combine tainted data
   },
   impl: (inputs) => {
     const arr = safeArray(inputs[0]);
@@ -146,6 +174,157 @@ const TextJoin: OperatorDefinition = {
     return arr.map(x => safeString(x)).join(sep);
   },
 };
+
+const TextSplit: OperatorDefinition = {
+  op: 'Text.Split',
+  category: 'Text',
+  inputs: [
+    { name: 'text', type: 'string' },
+    { name: 'delimiter', type: 'string' },
+  ],
+  output: 'array',
+  description: 'Splits text by delimiter into array.',
+  example: "Text.Split('a-b-c', '-') → ['a', 'b', 'c']",
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 1,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 2,
+  },
+  impl: (inputs) => {
+    const text = safeString(inputs[0]);
+    const delim = safeString(inputs[1]);
+    return delim ? text.split(delim) : [text];
+  },
+};
+
+const TextReplace: OperatorDefinition = {
+  op: 'Text.Replace',
+  category: 'Text',
+  inputs: [
+    { name: 'text', type: 'string' },
+    { name: 'find', type: 'string' },
+    { name: 'replace', type: 'string' },
+  ],
+  output: 'string',
+  description: 'Replaces all occurrences of find with replace.',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 5,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 2,
+  },
+  impl: (inputs) => {
+    const text = safeString(inputs[0]);
+    const find = safeString(inputs[1]);
+    const replace = safeString(inputs[2]);
+    if (!find) return text;
+    return text.split(find).join(replace);
+  },
+};
+
+const TextTemplate: OperatorDefinition = {
+  op: 'Text.Template',
+  category: 'Text',
+  inputs: [
+    { name: 'template', type: 'string', description: 'Template with {{key}} placeholders' },
+    { name: 'data', type: 'json' },
+  ],
+  output: 'string',
+  description: 'Fills template placeholders with data values.',
+  example: "Text.Template('Hello {{name}}', {name: 'World'}) → 'Hello World'",
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 5,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 2,
+  },
+  impl: (inputs) => {
+    const template = safeString(inputs[0]);
+    const data = inputs[1] as Record<string, unknown> | null;
+    if (!data || typeof data !== 'object') return template;
+    return template.replace(/\{\{(\w+)\}\}/g, (_, key) => safeString(data[key]));
+  },
+};
+
+// ============================================================================
+// SANITIZER OPERATORS (Tier 1 - Pure, Sync)
+// ============================================================================
+
+const SanitizerStripHTML: OperatorDefinition = {
+  op: 'Sanitizer.StripHTML',
+  category: 'Sanitizer',
+  inputs: [{ name: 'text', type: 'string' }],
+  output: 'string',
+  description: 'Removes HTML tags from text to prevent XSS. Downgrades taint to 0.',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 5,
+    idempotent: true,
+    bounded: true,
+    deterministic: true,
+    inputTaint: 2, // Accepts anything
+    outputTaint: 0, // Outputs clean
+  },
+  impl: (inputs) => safeString(inputs[0]).replace(/<[^>]*>?/gm, ''),
+};
+
+const SanitizerClamp: OperatorDefinition = {
+  op: 'Sanitizer.Clamp',
+  category: 'Sanitizer',
+  inputs: [
+    { name: 'value', type: 'number' },
+    { name: 'min', type: 'number' },
+    { name: 'max', type: 'number' },
+  ],
+  output: 'number',
+  description: 'Clamps number to safe bounds. Downgrades taint level.',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 1,
+    idempotent: true,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 0,
+  },
+  impl: (inputs) => Math.min(safeNumber(inputs[2]), Math.max(safeNumber(inputs[1]), safeNumber(inputs[0]))),
+};
+
+const SanitizerTruncate: OperatorDefinition = {
+  op: 'Sanitizer.Truncate',
+  category: 'Sanitizer',
+  inputs: [
+    { name: 'text', type: 'string' },
+    { name: 'maxLength', type: 'number' },
+  ],
+  output: 'string',
+  description: 'Truncates text to max length. Downgrades taint level.',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 1,
+    idempotent: true,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 0,
+  },
+  impl: (inputs) => safeString(inputs[0]).slice(0, Math.max(0, safeNumber(inputs[1]))),
+};
+
 
 // ============================================================================
 // MATH OPERATORS (Tier 1 - Pure, Sync)
@@ -164,10 +343,12 @@ const MathAdd: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
-    commutative: true,     // a + b === b + a
-    associative: true,     // (a + b) + c === a + (b + c)
+    complexity: 1,
+    commutative: true,
+    associative: true,
     bounded: true,
     deterministic: true,
+    outputTaint: 0,
   },
   impl: (inputs) => safeNumber(inputs[0]) + safeNumber(inputs[1]),
 };
@@ -185,8 +366,10 @@ const MathSubtract: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
+    complexity: 1,
     bounded: true,
     deterministic: true,
+    outputTaint: 0,
   },
   impl: (inputs) => safeNumber(inputs[0]) - safeNumber(inputs[1]),
 };
@@ -204,10 +387,12 @@ const MathMultiply: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
+    complexity: 1,
     commutative: true,
     associative: true,
     bounded: true,
     deterministic: true,
+    outputTaint: 0,
   },
   impl: (inputs) => safeNumber(inputs[0]) * safeNumber(inputs[1]),
 };
@@ -225,8 +410,10 @@ const MathDivide: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
+    complexity: 1,
     bounded: true,
     deterministic: true,
+    outputTaint: 0,
   },
   impl: (inputs) => {
     const a = safeNumber(inputs[0]);
@@ -252,11 +439,64 @@ const MathThreshold: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
-    idempotent: true,      // Threshold(Threshold(x)) still returns 0 or 1
+    complexity: 1,
+    idempotent: true,
     bounded: true,
     deterministic: true,
+    outputTaint: 0,
   },
   impl: (inputs) => safeNumber(inputs[0]) > safeNumber(inputs[1]) ? 1 : 0,
+};
+
+const MathClamp: OperatorDefinition = {
+  op: 'Math.Clamp',
+  category: 'Math',
+  inputs: [
+    { name: 'value', type: 'number' },
+    { name: 'min', type: 'number' },
+    { name: 'max', type: 'number' },
+  ],
+  output: 'number',
+  description: 'Clamps value to be within min and max bounds.',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 1,
+    idempotent: true,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 0,
+  },
+  impl: (inputs) => Math.min(safeNumber(inputs[2]), Math.max(safeNumber(inputs[1]), safeNumber(inputs[0]))),
+};
+
+const MathNormalize: OperatorDefinition = {
+  op: 'Math.Normalize',
+  category: 'Math',
+  inputs: [
+    { name: 'value', type: 'number' },
+    { name: 'min', type: 'number' },
+    { name: 'max', type: 'number' },
+  ],
+  output: 'number',
+  description: 'Normalizes value to 0-1 range based on min/max.',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 1,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 0,
+  },
+  impl: (inputs) => {
+    const val = safeNumber(inputs[0]);
+    const min = safeNumber(inputs[1]);
+    const max = safeNumber(inputs[2]);
+    if (max === min) return 0;
+    return (val - min) / (max - min);
+  },
 };
 
 // ============================================================================
@@ -277,8 +517,10 @@ const LogicIf: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
+    complexity: 1,
     bounded: true,
     deterministic: true,
+    outputTaint: 2, // Output taint depends on what is passed in
   },
   impl: (inputs) => inputs[0] ? inputs[1] : inputs[2],
 };
@@ -297,8 +539,10 @@ const UtilityJsonPath: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
+    complexity: 5,
     bounded: true,
     deterministic: true,
+    outputTaint: 2, // Extracted value is of unknown taint
   },
   impl: (inputs) => {
     const obj = inputs[0] as Record<string, unknown> | null;
@@ -325,8 +569,10 @@ const ListMap: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
+    complexity: 5,
     bounded: true,
     deterministic: true,
+    outputTaint: 2,
   },
   impl: (inputs) => safeArray(inputs[0]).map(x => safeString(x)),
 };
@@ -341,9 +587,11 @@ const ListFilter: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
-    idempotent: true,      // Filter(Filter(x)) === Filter(x)
+    complexity: 5,
+    idempotent: true,
     bounded: true,
     deterministic: true,
+    outputTaint: 2,
   },
   impl: (inputs) => safeArray(inputs[0]).filter(x => !!x),
 };
@@ -358,9 +606,11 @@ const ListSort: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
-    idempotent: true,      // Sort(Sort(x)) === Sort(x)
+    complexity: 5,
+    idempotent: true,
     bounded: true,
     deterministic: true,
+    outputTaint: 2,
   },
   impl: (inputs) => [...safeArray(inputs[0])].sort(),
 };
@@ -378,8 +628,10 @@ const ListTake: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
+    complexity: 5,
     bounded: true,
     deterministic: true,
+    outputTaint: 2,
   },
   impl: (inputs) => {
     const arr = safeArray(inputs[0]);
@@ -397,14 +649,16 @@ const ListReduce: OperatorDefinition = {
     { name: 'operation', type: 'string', description: 'sum|product|concat|min|max|count' },
   ],
   output: 'any',
-  description: 'Reduces array to single value using named operation (sum, product, concat, min, max, count)',
+  description: 'Reduces array to single value using named operation',
   example: "List.Reduce([1,2,3], 0, 'sum') → 6",
   tier: 1,
   pure: true,
   async: false,
   properties: {
+    complexity: 5,
     bounded: true,
     deterministic: true,
+    outputTaint: 2,
   },
   impl: (inputs) => {
     const arr = safeArray(inputs[0]);
@@ -445,8 +699,10 @@ const ListFoldN: OperatorDefinition = {
   pure: true,
   async: false,
   properties: {
-    bounded: true,         // Hard cap at 1000
+    complexity: 1,
+    bounded: true,
     deterministic: true,
+    outputTaint: 0,
   },
   impl: (inputs) => {
     const MAX_FOLD_ITERATIONS = 1000;
@@ -459,12 +715,86 @@ const ListFoldN: OperatorDefinition = {
   },
 };
 
+const ListAppend: OperatorDefinition = {
+  op: 'List.Append',
+  category: 'List',
+  inputs: [
+    { name: 'list', type: 'array' },
+    { name: 'item', type: 'any' },
+  ],
+  output: 'array',
+  description: 'Appends an item to a list and returns the new list',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 1,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 2,
+  },
+  impl: (inputs) => {
+    const arr = safeArray(inputs[0]);
+    const item = inputs[1];
+    return [...arr, item];
+  },
+};
+
+const ListGroupBy: OperatorDefinition = {
+  op: 'List.GroupBy',
+  category: 'List',
+  inputs: [
+    { name: 'list', type: 'array' },
+    { name: 'key', type: 'string' },
+  ],
+  output: 'json',
+  description: 'Groups list elements by a key property.',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 5,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 2,
+  },
+  impl: (inputs) => {
+    const arr = safeArray(inputs[0]);
+    const key = safeString(inputs[1]);
+    const result: Record<string, unknown[]> = {};
+    for (const item of arr) {
+      if (item && typeof item === 'object') {
+        const groupKey = safeString((item as Record<string, unknown>)[key]);
+        if (!result[groupKey]) result[groupKey] = [];
+        result[groupKey].push(item);
+      }
+    }
+    return result;
+  },
+};
+
+const ListLength: OperatorDefinition = {
+  op: 'List.Length',
+  category: 'List',
+  inputs: [{ name: 'list', type: 'array' }],
+  output: 'number',
+  description: 'Returns the length of the list.',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 1,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 0,
+  },
+  impl: (inputs) => safeArray(inputs[0]).length,
+};
+
 // ============================================================================
 // IMAGE OPERATORS (Tier 2 - Metered, Async)
-// Note: Implementations reference processImage which is defined in WasmKernel
 // ============================================================================
 
-// Placeholder for async image processing - actual impl injected at runtime
 const createImageOp = (
   name: string,
   description: string,
@@ -479,11 +809,12 @@ const createImageOp = (
   pure: true,
   async: true,
   properties: {
-    idempotent: true,      // Grayscale(Grayscale(x)) === Grayscale(x)
+    complexity: 10,
+    idempotent: true,
     bounded: true,
     deterministic: true,
+    outputTaint: 1,
   },
-  // Placeholder - actual canvas implementation in WasmKernel
   impl: async () => { throw new Error(`Image.${name} requires browser context`); },
 });
 
@@ -491,7 +822,167 @@ const ImageGrayscale = createImageOp('Grayscale', 'Converts image to grayscale',
 const ImageInvert = createImageOp('Invert', 'Inverts image colors', 'invert');
 const ImageEdgeDetect = createImageOp('EdgeDetect', 'Performs edge detection on image', 'edge');
 const ImageResize = createImageOp('Resize', 'Resizes image to fit bounds', 'resize');
-const ImageThreshold = createImageOp('Threshold', 'Converts image to black/white based on brightness threshold', 'threshold');
+const ImageThreshold = createImageOp('Threshold', 'Converts image to black/white', 'threshold');
+const ImageBlur = createImageOp('Blur', 'Applies Gaussian blur to image', 'blur');
+
+const ImageDecode: OperatorDefinition = {
+  op: 'Image.Decode',
+  category: 'Image',
+  inputs: [{ name: 'data', type: 'string', description: 'DataURL or base64 image data' }],
+  output: 'image',
+  description: 'Decodes image data into pixel buffer for processing.',
+  tier: 2,
+  pure: true,
+  async: true,
+  properties: {
+    complexity: 5,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 1,
+  },
+  impl: async () => { throw new Error('Image.Decode requires browser context'); },
+};
+
+// ============================================================================
+// COMPUTER VISION OPERATORS (Tier 2 - Heavy)
+// ============================================================================
+
+const CVContourTrace: OperatorDefinition = {
+  op: 'CV.ContourTrace',
+  category: 'CV',
+  inputs: [{ name: 'image', type: 'image' }],
+  output: 'array',
+  description: 'Traces contours in binary image using marching squares. Returns array of path points.',
+  example: 'CV.ContourTrace(binaryImage) → [[{x,y}, ...], ...]',
+  tier: 2,
+  pure: true,
+  async: true,
+  properties: {
+    complexity: 10,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 1,
+  },
+  impl: async () => { throw new Error('CV.ContourTrace requires browser context'); },
+};
+
+const CVVectorize: OperatorDefinition = {
+  op: 'CV.Vectorize',
+  category: 'CV',
+  inputs: [{ name: 'image', type: 'image' }],
+  output: 'svg',
+  description: 'Full vectorization: edge detect → contour trace → SVG paths.',
+  tier: 2,
+  pure: true,
+  async: true,
+  properties: {
+    complexity: 10,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 1,
+  },
+  impl: async () => { throw new Error('CV.Vectorize requires browser context'); },
+};
+
+// ============================================================================
+// VECTOR OPERATORS (Tier 1 - Light)
+// ============================================================================
+
+const VectorToSVG: OperatorDefinition = {
+  op: 'Vector.ToSVG',
+  category: 'Vector',
+  inputs: [{ name: 'paths', type: 'array', description: 'Array of path point arrays' }],
+  output: 'svg',
+  description: 'Converts path point arrays to SVG string.',
+  example: 'Vector.ToSVG([[{x:0,y:0}, {x:10,y:10}]]) → "<svg>..."',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 5,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 1,
+  },
+  impl: (inputs) => {
+    const paths = safeArray(inputs[0]);
+    const pathStrings = paths.map(path => {
+      const points = safeArray(path);
+      if (points.length === 0) return '';
+      const first = points[0] as { x?: number; y?: number };
+      let d = `M ${safeNumber(first?.x)} ${safeNumber(first?.y)}`;
+      for (let i = 1; i < points.length; i++) {
+        const pt = points[i] as { x?: number; y?: number };
+        d += ` L ${safeNumber(pt?.x)} ${safeNumber(pt?.y)}`;
+      }
+      return `<path d="${d}" fill="none" stroke="black" />`;
+    });
+    return `<svg xmlns="http://www.w3.org/2000/svg">${pathStrings.join('')}</svg>`;
+  },
+};
+
+const VectorSimplify: OperatorDefinition = {
+  op: 'Vector.Simplify',
+  category: 'Vector',
+  inputs: [
+    { name: 'paths', type: 'array' },
+    { name: 'tolerance', type: 'number' },
+  ],
+  output: 'array',
+  description: 'Reduces path complexity using Douglas-Peucker algorithm.',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 5,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 1,
+  },
+  impl: (inputs) => {
+    // Simplified Douglas-Peucker implementation
+    const paths = safeArray(inputs[0]);
+    const tolerance = safeNumber(inputs[1]) || 1;
+    
+    function simplifyPath(points: unknown[]): unknown[] {
+      if (points.length <= 2) return points;
+      
+      // Find furthest point from line between first and last
+      const first = points[0] as { x?: number; y?: number };
+      const last = points[points.length - 1] as { x?: number; y?: number };
+      const x1 = safeNumber(first?.x), y1 = safeNumber(first?.y);
+      const x2 = safeNumber(last?.x), y2 = safeNumber(last?.y);
+      
+      let maxDist = 0;
+      let maxIdx = 0;
+      
+      for (let i = 1; i < points.length - 1; i++) {
+        const pt = points[i] as { x?: number; y?: number };
+        const px = safeNumber(pt?.x), py = safeNumber(pt?.y);
+        
+        // Perpendicular distance to line
+        const num = Math.abs((y2-y1)*px - (x2-x1)*py + x2*y1 - y2*x1);
+        const den = Math.sqrt((y2-y1)**2 + (x2-x1)**2) || 1;
+        const dist = num / den;
+        
+        if (dist > maxDist) {
+          maxDist = dist;
+          maxIdx = i;
+        }
+      }
+      
+      if (maxDist > tolerance) {
+        const left = simplifyPath(points.slice(0, maxIdx + 1));
+        const right = simplifyPath(points.slice(maxIdx));
+        return [...left.slice(0, -1), ...right];
+      }
+      
+      return [first, last];
+    }
+    
+    return paths.map(path => simplifyPath(safeArray(path)));
+  },
+};
 
 // ============================================================================
 // AUDIO OPERATORS (Tier 2 - Metered, Async)
@@ -507,10 +998,11 @@ const AudioFFT: OperatorDefinition = {
   pure: true,
   async: true,
   properties: {
+    complexity: 10,
     bounded: true,
     deterministic: true,
+    outputTaint: 1,
   },
-  // Placeholder - actual Web Audio implementation in WasmKernel
   impl: async () => { throw new Error('Audio.FFT requires browser context'); },
 };
 
@@ -524,11 +1016,113 @@ const AudioPeakDetect: OperatorDefinition = {
   pure: true,
   async: true,
   properties: {
+    complexity: 10,
     bounded: true,
     deterministic: true,
+    outputTaint: 0,
   },
-  // Placeholder - actual Web Audio implementation in WasmKernel
   impl: async () => { throw new Error('Audio.PeakDetect requires browser context'); },
+};
+
+const AudioDecode: OperatorDefinition = {
+  op: 'Audio.Decode',
+  category: 'Audio',
+  inputs: [{ name: 'data', type: 'string', description: 'DataURL of audio' }],
+  output: 'audio',
+  description: 'Decodes audio data into PCM buffer for processing.',
+  tier: 2,
+  pure: true,
+  async: true,
+  properties: {
+    complexity: 10,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 1,
+  },
+  impl: async () => { throw new Error('Audio.Decode requires browser context'); },
+};
+
+const AudioBeatDetect: OperatorDefinition = {
+  op: 'Audio.BeatDetect',
+  category: 'Audio',
+  inputs: [{ name: 'audio', type: 'audio' }],
+  output: 'array',
+  description: 'Detects beat timestamps in audio. Returns array of time markers.',
+  tier: 2,
+  pure: true,
+  async: true,
+  properties: {
+    complexity: 10,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 1,
+  },
+  impl: async () => { throw new Error('Audio.BeatDetect requires browser context'); },
+};
+
+// ============================================================================
+// DEBUG OPERATORS (Tier 1 - Light)
+// ============================================================================
+
+const DebugTraceInsert: OperatorDefinition = {
+  op: 'Debug.TraceInsert',
+  category: 'Debug',
+  inputs: [
+    { name: 'value', type: 'any' },
+    { name: 'label', type: 'string' },
+  ],
+  output: 'any',
+  description: 'Logs value with label for debugging, passes through unchanged.',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 1,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 2, // Passes through
+  },
+  impl: (inputs) => {
+    const value = inputs[0];
+    const label = safeString(inputs[1]);
+    console.log(`[Debug.TraceInsert] ${label}:`, value);
+    return value;
+  },
+};
+
+const DebugDiffState: OperatorDefinition = {
+  op: 'Debug.DiffState',
+  category: 'Debug',
+  inputs: [
+    { name: 'before', type: 'json' },
+    { name: 'after', type: 'json' },
+  ],
+  output: 'json',
+  description: 'Returns the difference between two state objects.',
+  tier: 1,
+  pure: true,
+  async: false,
+  properties: {
+    complexity: 5,
+    bounded: true,
+    deterministic: true,
+    outputTaint: 0,
+  },
+  impl: (inputs) => {
+    const before = inputs[0] as Record<string, unknown> | null;
+    const after = inputs[1] as Record<string, unknown> | null;
+    if (!before || !after || typeof before !== 'object' || typeof after !== 'object') {
+      return {};
+    }
+    const diff: Record<string, { before: unknown; after: unknown }> = {};
+    const allKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const key of allKeys) {
+      if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
+        diff[key] = { before: before[key], after: after[key] };
+      }
+    }
+    return diff;
+  },
 };
 
 // ============================================================================
@@ -536,41 +1130,71 @@ const AudioPeakDetect: OperatorDefinition = {
 // ============================================================================
 
 export const OPERATOR_REGISTRY: Record<string, OperatorDefinition> = {
-  // Text (4)
+  // Text (8)
   'Text.ToUpper': TextToUpper,
+  'Text.ToLower': TextToLower,
   'Text.Length': TextLength,
   'Text.RegexMatch': TextRegexMatch,
   'Text.Join': TextJoin,
+  'Text.Split': TextSplit,
+  'Text.Replace': TextReplace,
+  'Text.Template': TextTemplate,
   
-  // Math (5)
+  // Sanitizer (3)
+  'Sanitizer.StripHTML': SanitizerStripHTML,
+  'Sanitizer.Clamp': SanitizerClamp,
+  'Sanitizer.Truncate': SanitizerTruncate,
+
+  // Math (7)
   'Math.Add': MathAdd,
   'Math.Subtract': MathSubtract,
   'Math.Multiply': MathMultiply,
   'Math.Divide': MathDivide,
   'Math.Threshold': MathThreshold,
+  'Math.Clamp': MathClamp,
+  'Math.Normalize': MathNormalize,
   
   // Logic (2)
   'Logic.If': LogicIf,
   'Utility.JsonPath': UtilityJsonPath,
   
-  // List (6)
+  // List (9)
   'List.Map': ListMap,
   'List.Filter': ListFilter,
   'List.Sort': ListSort,
   'List.Take': ListTake,
   'List.Reduce': ListReduce,
   'List.FoldN': ListFoldN,
+  'List.Append': ListAppend,
+  'List.GroupBy': ListGroupBy,
+  'List.Length': ListLength,
   
-  // Image (5) - Tier 2
+  // Image (7) - Tier 2
+  'Image.Decode': ImageDecode,
   'Image.Grayscale': ImageGrayscale,
   'Image.Invert': ImageInvert,
   'Image.EdgeDetect': ImageEdgeDetect,
   'Image.Resize': ImageResize,
   'Image.Threshold': ImageThreshold,
+  'Image.Blur': ImageBlur,
   
-  // Audio (2) - Tier 2
+  // Computer Vision (2) - Tier 2
+  'CV.ContourTrace': CVContourTrace,
+  'CV.Vectorize': CVVectorize,
+  
+  // Vector (2) - Tier 1
+  'Vector.ToSVG': VectorToSVG,
+  'Vector.Simplify': VectorSimplify,
+  
+  // Audio (4) - Tier 2
+  'Audio.Decode': AudioDecode,
   'Audio.FFT': AudioFFT,
   'Audio.PeakDetect': AudioPeakDetect,
+  'Audio.BeatDetect': AudioBeatDetect,
+  
+  // Debug (2) - Tier 1
+  'Debug.TraceInsert': DebugTraceInsert,
+  'Debug.DiffState': DebugDiffState,
 };
 
-// Total: 24 operators
+// Total: 46 operators

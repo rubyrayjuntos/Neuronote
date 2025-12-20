@@ -6,6 +6,18 @@ import { SystemLog } from '../types';
  * remote logging, persistence, or debug filtering.
  */
 
+// UUID helper for non-secure contexts (e.g., http://localhost)
+const generateUUID = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
 export type LogSource = SystemLog['source'];  // Derived from SystemLog for consistency
 
@@ -39,7 +51,7 @@ export function createLog(
   payload?: unknown
 ): SystemLog {
   return {
-    id: crypto.randomUUID(),
+    id: generateUUID(),
     timestamp: Date.now(),
     source,
     type,

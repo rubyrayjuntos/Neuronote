@@ -1,8 +1,17 @@
 import React, { useState } from 'react';
 import { ChangeRecord, SessionMetrics, InteractionTrace, EvaluationSuiteReport } from '../types';
-import { Microscope, GitCommit, AlertOctagon, CheckCircle2, XCircle, Activity, Timer, Database, Play, ChevronDown, ChevronRight, AlertTriangle, Ghost, ClipboardCheck, Loader2 } from 'lucide-react';
+import { 
+    Microscope, GitCommit, AlertOctagon, CheckCircle2, XCircle, Activity, Timer, 
+    Database, Play, ChevronDown, ChevronRight, AlertTriangle, Ghost, ClipboardCheck, 
+    Loader2, ShieldCheck 
+} from 'lucide-react';
 import { EvaluationHarness } from '../utils/harness';
-import { INITIAL_APP } from '../constants';
+import { OPERATOR_REGISTRY, OperatorDefinition } from '../operators';
+import { 
+    INITIAL_APP, ALLOWED_OPS, SAFE_TAGS, FORBIDDEN_PROPS, 
+    FORBIDDEN_STYLE_PROPS, ALLOWED_URL_PATTERNS, FORBIDDEN_TAILWIND_CLASSES, 
+    ALLOWED_TYPES 
+} from '../constants';
 
 interface LabConsoleProps {
   metrics: SessionMetrics;
@@ -11,9 +20,114 @@ interface LabConsoleProps {
   onReplay?: (record: ChangeRecord) => void;
 }
 
+const GatekeeperTab: React.FC = () => {
+    const handleGenerateManifest = () => {
+        const manifest = {
+            version: '1.0.0',
+            timestamp: new Date().toISOString(),
+            primitives: {},
+        };
+
+        for (const op of Object.values(OPERATOR_REGISTRY)) {
+            const category = op.category.toLowerCase();
+            if (!manifest.primitives[category]) {
+                manifest.primitives[category] = [];
+            }
+            const { impl, ...publicOp } = op;
+            manifest.primitives[category].push(publicOp);
+        }
+
+        const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'manifest.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    return (
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="p-4 border border-zinc-800 rounded bg-zinc-900/50">
+                <h3 className="text-sm font-bold text-zinc-100 mb-2 flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-amber-400" />
+                    Gatekeeper Configuration
+                </h3>
+                <p className="text-zinc-500 mb-4">
+                    Live view of the security and safety rules enforced by the Validator pipeline.
+                </p>
+                <button
+                    onClick={handleGenerateManifest}
+                    className="w-full py-2 text-white rounded font-bold flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-500"
+                >
+                    Generate & Download manifest.json
+                </button>
+                <p className="text-zinc-600 text-[10px] mt-2 text-center">
+                    After downloading, move the file to the `public/` directory in the project root.
+                </p>
+            </div>
+
+            <div className="space-y-4">
+                {/* Operator Registry */}
+                <div>
+                    <h4 className="font-bold text-zinc-400 uppercase tracking-wider text-[10px] mb-2">Operator Allowlist ({ALLOWED_OPS.length})</h4>
+                    <div className="p-3 bg-zinc-900 border border-zinc-800 rounded max-h-60 overflow-y-auto">
+                        {Object.values(OPERATOR_REGISTRY).map(op => (
+                            <div key={op.op} className="grid grid-cols-3 gap-2 items-center text-[10px] border-b border-zinc-800/50 py-1 last:border-0">
+                                <span className="font-bold text-indigo-300">{op.op}</span>
+                                <div className="col-span-2 flex flex-wrap gap-x-2 gap-y-1">
+                                    {op.properties.deterministic && <span className="bg-emerald-900 text-emerald-300 px-1 rounded-sm">deterministic</span>}
+                                    {op.properties.bounded && <span className="bg-blue-900 text-blue-300 px-1 rounded-sm">bounded</span>}
+                                    {op.properties.idempotent && <span className="bg-purple-900 text-purple-300 px-1 rounded-sm">idempotent</span>}
+                                    {op.properties.invertible && <span className="bg-amber-900 text-amber-300 px-1 rounded-sm">invertible</span>}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* UI Component Whitelist */}
+                <div>
+                    <h4 className="font-bold text-zinc-400 uppercase tracking-wider text-[10px] mb-2">UI Component Whitelist</h4>
+                    <div className="p-3 bg-zinc-900 border border-zinc-800 rounded text-zinc-400 flex flex-wrap gap-2">
+                        {ALLOWED_TYPES.map(t => <span key={t} className="bg-zinc-800 px-2 py-0.5 rounded-full">{t}</span>)}
+                    </div>
+                </div>
+
+                {/* HTML Tag Whitelist */}
+                <div>
+                    <h4 className="font-bold text-zinc-400 uppercase tracking-wider text-[10px] mb-2">HTML Tag Whitelist</h4>
+                    <div className="p-3 bg-zinc-900 border border-zinc-800 rounded text-zinc-400 flex flex-wrap gap-2">
+                        {SAFE_TAGS.map(t => <span key={t} className="bg-zinc-800 px-2 py-0.5 rounded-full">{t}</span>)}
+                    </div>
+                </div>
+
+                {/* Forbidden Props */}
+                <div>
+                    <h4 className="font-bold text-rose-400 uppercase tracking-wider text-[10px] mb-2">Forbidden Props</h4>
+                    <div className="p-3 bg-rose-950/30 border border-rose-900/50 rounded text-rose-300 flex flex-wrap gap-2">
+                        {FORBIDDEN_PROPS.map(p => <span key={p} className="bg-rose-900/50 px-2 py-0.5 rounded-full">{p}</span>)}
+                    </div>
+                </div>
+                 {/* Forbidden CSS */}
+                 <div>
+                    <h4 className="font-bold text-rose-400 uppercase tracking-wider text-[10px] mb-2">Forbidden CSS</h4>
+                    <div className="p-3 bg-rose-950/30 border border-rose-900/50 rounded text-rose-300 flex flex-wrap gap-2">
+                        {FORBIDDEN_STYLE_PROPS.map(p => <span key={p} className="bg-rose-900/50 px-2 py-0.5 rounded-full">{p}</span>)}
+                        {FORBIDDEN_TAILWIND_CLASSES.map(p => <span key={p} className="bg-rose-900/50 px-2 py-0.5 rounded-full">{p}</span>)}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
 export const LabConsole: React.FC<LabConsoleProps> = ({ metrics, history, interactions, onReplay }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'trace' | 'eval'>('trace');
+  const [activeTab, setActiveTab] = useState<'trace' | 'gatekeeper' | 'eval'>('trace');
   const [evalReport, setEvalReport] = useState<EvaluationSuiteReport | null>(null);
   const [isRunningEval, setIsRunningEval] = useState(false);
   const [evalStatus, setEvalStatus] = useState<string>('');
@@ -102,6 +216,12 @@ export const LabConsole: React.FC<LabConsoleProps> = ({ metrics, history, intera
               Evolution Trace
           </button>
           <button 
+             onClick={() => setActiveTab('gatekeeper')} 
+             className={`px-4 py-2 text-[10px] uppercase font-bold tracking-wider flex items-center gap-2 ${activeTab === 'gatekeeper' ? 'text-amber-400 bg-amber-950/20' : 'text-zinc-600 hover:text-zinc-400'}`}
+          >
+              <ShieldCheck className="w-3 h-3" /> Gatekeeper
+          </button>
+          <button 
              onClick={() => setActiveTab('eval')} 
              className={`px-4 py-2 text-[10px] uppercase font-bold tracking-wider ${activeTab === 'eval' ? 'text-emerald-400 bg-emerald-950/20' : 'text-zinc-600 hover:text-zinc-400'}`}
           >
@@ -109,7 +229,9 @@ export const LabConsole: React.FC<LabConsoleProps> = ({ metrics, history, intera
           </button>
       </div>
 
-      {activeTab === 'eval' ? (
+      {activeTab === 'gatekeeper' ? (
+          <GatekeeperTab />
+      ) : activeTab === 'eval' ? (
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
               <div className="p-4 border border-zinc-800 rounded bg-zinc-900/50">
                   <h3 className="text-sm font-bold text-zinc-100 mb-2">Appendix A: Automated Test Harness</h3>

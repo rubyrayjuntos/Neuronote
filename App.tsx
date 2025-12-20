@@ -1,18 +1,34 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { createProvider, extractExecutionFeedback, AIProvider, ProviderType, AVAILABLE_PROVIDERS } from './services/ai';
 import { Persistence } from './services/persistence';
+import { ObservabilityService } from './services/observability';
 import { HostRuntime } from './components/HostRuntime';
 import { LabConsole } from './components/LabConsole';
+import { FlowViewer } from './components/FlowViewer';
 import { INITIAL_APP, MAX_LOG_ENTRIES, MAX_INTERACTION_TRACES } from './constants';
 import { AppDefinition, SystemLog, AppContext, VerificationReport, ChangeRecord, InteractionTrace } from './types';
 import { verifyProposal } from './utils/validator';
+import { OPERATOR_REGISTRY } from './operators';
 import { computeDiff, computeSessionMetrics } from './utils/analytics';
 import { migrateContext, salvageContext, verifyLensLaws } from './utils/migration';
 import { runHonestyOracle, formatHonestyReport } from './utils/honestyOracle';
 import { useDebounce } from './utils/hooks';
-import { Terminal, Cpu, ShieldCheck, Activity, BrainCircuit, RefreshCw, AlertTriangle, CheckCircle, XCircle, Microscope, GitCommit, Database } from 'lucide-react';
+import { Terminal, Cpu, ShieldCheck, Activity, BrainCircuit, RefreshCw, AlertTriangle, CheckCircle, XCircle, Microscope, GitCommit, Database, Eye } from 'lucide-react';
 
 import { buildSystemPrompt } from './services/ai/gemini';
+
+// UUID helper that works in all environments
+const generateUUID = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback for environments without crypto.randomUUID
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
 
 // Initialize AI provider based on environment
 const getInitialProvider = (): AIProvider => {
@@ -36,6 +52,7 @@ export default function App() {
   const [appDef, setAppDef] = useState<AppDefinition>(INITIAL_APP);
   const [context, setContext] = useState<AppContext>(INITIAL_APP.initialContext);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [manifest, setManifest] = useState<any | null>(null);
   
   const [prompt, setPrompt] = useState('');
   const [isSynthesizing, setIsSynthesizing] = useState(false);
@@ -47,7 +64,7 @@ export default function App() {
   const [aiProvider, setAiProvider] = useState<AIProvider>(getInitialProvider);
 
   // 9. Observability State
-  const [viewMode, setViewMode] = useState<'control' | 'lab'>('control');
+  const [viewMode, setViewMode] = useState<'control' | 'lab' | 'flow'>('control');
   const [changeHistory, setChangeHistory] = useState<ChangeRecord[]>([]);
   const [interactions, setInteractions] = useState<InteractionTrace[]>([]);
   
@@ -65,23 +82,44 @@ export default function App() {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
-  // --- PERSISTENCE LAYER ---
+  // --- PERSISTENCE & MANIFEST LOADING ---
   
   // Load on Mount
   useEffect(() => {
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'INFO', message: 'Booting NeuroNote...' });
+
+      // 1. Fetch Component Manifest
+      fetch('/manifest.json')
+        .then(res => {
+          if (!res.ok) {
+            throw new Error(`Failed to fetch manifest: ${res.statusText}`);
+          }
+          return res.json();
+        })
+        .then(data => {
+          setManifest(data);
+          addLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: `Component manifest loaded (v${data.version}).` });
+        })
+        .catch(err => {
+            console.error(err);
+            setError("CRITICAL: Could not load component manifest. App cannot function.");
+            addLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `Failed to load manifest.json: ${err.message}` });
+        });
+
+      // 2. Load Persisted State
       const snapshot = Persistence.load();
       if (snapshot) {
           setAppDef(snapshot.definition);
           setContext(snapshot.context);
-          addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'STORAGE', type: 'SUCCESS', message: `Restored state from ${new Date(snapshot.timestamp).toLocaleTimeString()}` });
+          addLog({ id: generateUUID(), timestamp: Date.now(), source: 'STORAGE', type: 'SUCCESS', message: `Restored state from ${new Date(snapshot.timestamp).toLocaleTimeString()}` });
       } else {
-          addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'STORAGE', type: 'INFO', message: 'No saved state found. Starting fresh.' });
+          addLog({ id: generateUUID(), timestamp: Date.now(), source: 'STORAGE', type: 'INFO', message: 'No saved state found. Starting fresh.' });
       }
       
       const journal = Persistence.loadJournal();
       if (journal && journal.length > 0) {
           setChangeHistory(journal);
-          addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'STORAGE', type: 'INFO', message: `Loaded ${journal.length} records from Change Journal.` });
+          addLog({ id: generateUUID(), timestamp: Date.now(), source: 'STORAGE', type: 'INFO', message: `Loaded ${journal.length} records from Change Journal.` });
       }
 
       setIsLoaded(true);
@@ -114,7 +152,7 @@ export default function App() {
 
   // --- FAULT TOLERANCE ---
   const handleRuntimeError = useCallback((error: Error) => {
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `CRITICAL: ${error.message}` });
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `CRITICAL: ${error.message}` });
       
       setChangeHistory(prev => {
           if (prev.length === 0) return prev;
@@ -129,7 +167,7 @@ export default function App() {
                   failureReason: error.message 
               };
               
-              addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'WARN', message: `Automatic Rollback to v${latest.oldDef.version}` });
+              addLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'WARN', message: `Automatic Rollback to v${latest.oldDef.version}` });
               
               // Perform State Revert
               setAppDef(latest.oldDef);
@@ -155,23 +193,23 @@ export default function App() {
     setError(null);
     setVerificationReport(null);
     
-    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `━━━ SIMULATION MODE ━━━` });
-    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `User Prompt: "${testPrompt}"` });
+    addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `━━━ SIMULATION MODE ━━━` });
+    addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `User Prompt: "${testPrompt}"` });
     
     // Step 1: Show what we send to the AI
-    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 1: BUILD SYSTEM PROMPT ─────` });
+    addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 1: BUILD SYSTEM PROMPT ─────` });
     
     const systemPrompt = buildSystemPrompt(appDef, null, undefined);
-    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `System prompt length: ${systemPrompt.length} chars` });
-    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `System prompt (first 500 chars):\n${systemPrompt.substring(0, 500)}...` });
+    addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `System prompt length: ${systemPrompt.length} chars` });
+    addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `System prompt (first 500 chars):\n${systemPrompt.substring(0, 500)}...` });
     
     // Step 2: Show the user message format
-    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 2: FORMAT REQUEST ─────` });
+    addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 2: FORMAT REQUEST ─────` });
     const userMessage = `USER REQUEST:\n"${testPrompt}"\n\nIMPORTANT: Respond with ONLY a complete JSON AppDefinition containing ALL required fields:\n- version (string)\n- initialContext (object)\n- pipelines (object)\n- machine (object with "initial" and "states")\n- view (object with "id", "type", and UI tree)\n- testVectors (array)\n\nNo markdown code blocks, just raw JSON.`;
-    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `User message:\n${userMessage}` });
+    addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `User message:\n${userMessage}` });
     
     // Step 3: Show the mock response (what Claude SHOULD return)
-    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 3: MOCK AI RESPONSE ─────` });
+    addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 3: MOCK AI RESPONSE ─────` });
     
     const mockProposal: AppDefinition = {
       version: `v${new Date().toISOString().slice(0, 16).replace('T', '-')}`,
@@ -252,68 +290,68 @@ export default function App() {
           name: 'Increment increases count',
           initialState: 'idle',
           steps: [
-            { event: 'INCREMENT', expectState: 'idle', expectContext: { count: 1 } }
+            { event: 'INCREMENT', expectState: 'idle', expectContextKeys: ['count'] }
           ]
         },
         {
           name: 'Decrement decreases count',
           initialState: 'idle', 
           steps: [
-            { event: 'DECREMENT', expectState: 'idle', expectContext: { count: -1 } }
+            { event: 'DECREMENT', expectState: 'idle', expectContextKeys: ['count'] }
           ]
         }
       ]
     };
     
-    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'SUCCESS', message: `Mock proposal generated: ${mockProposal.version}` });
+    addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'SUCCESS', message: `Mock proposal generated: ${mockProposal.version}` });
     console.log('[SIM] Full mock proposal:', JSON.stringify(mockProposal, null, 2));
-    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Proposal JSON logged to browser console` });
+    addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Proposal JSON logged to browser console` });
     
     // Step 4: Validation
-    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 4: VALIDATION ─────` });
+    addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 4: VALIDATION ─────` });
     
     try {
-      const report = await verifyProposal(mockProposal);
+      const report = await verifyProposal(mockProposal, OPERATOR_REGISTRY);
       setVerificationReport(report);
       
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Structural checks: ${report.checks.structural.length}` });
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Structural checks: ${report.checks.structural.length}` });
       report.checks.structural.forEach(c => {
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: c.status === 'PASS' ? 'SUCCESS' : 'ERROR', message: `  ${c.status}: ${c.message}` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: c.status === 'PASS' ? 'SUCCESS' : 'ERROR', message: `  ${c.status}: ${c.message}` });
       });
       
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Semantic checks: ${report.checks.semantic.length}` });
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Semantic checks: ${report.checks.semantic.length}` });
       report.checks.semantic.forEach(c => {
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: c.status === 'PASS' ? 'SUCCESS' : (c.status === 'WARN' ? 'WARN' : 'ERROR'), message: `  ${c.status}: ${c.message}` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: c.status === 'PASS' ? 'SUCCESS' : (c.status === 'WARN' ? 'WARN' : 'ERROR'), message: `  ${c.status}: ${c.message}` });
       });
       
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Honesty checks: ${report.checks.honesty.length}` });
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Honesty checks: ${report.checks.honesty.length}` });
       report.checks.honesty.forEach(c => {
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: c.status === 'PASS' ? 'SUCCESS' : 'ERROR', message: `  ${c.status}: ${c.message}` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: c.status === 'PASS' ? 'SUCCESS' : 'ERROR', message: `  ${c.status}: ${c.message}` });
       });
       
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: report.passed ? 'SUCCESS' : 'ERROR', message: `Final Score: ${report.score}/100 - ${report.passed ? 'PASSED' : 'FAILED'}` });
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: report.passed ? 'SUCCESS' : 'ERROR', message: `Final Score: ${report.score}/100 - ${report.passed ? 'PASSED' : 'FAILED'}` });
       
       // Step 5: If passed, show what would happen
       if (report.passed) {
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 5: APPLY PROPOSAL ─────` });
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'SUCCESS', message: `Would update appDef and render new UI` });
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `View tree: ${mockProposal.view.type} with ${mockProposal.view.children?.length || 0} children` });
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `States: ${Object.keys(mockProposal.machine.states).join(', ')}` });
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Pipelines: ${Object.keys(mockProposal.pipelines || {}).join(', ')}` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── STEP 5: APPLY PROPOSAL ─────` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'SUCCESS', message: `Would update appDef and render new UI` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `View tree: ${mockProposal.view.type} with ${mockProposal.view.children?.length || 0} children` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `States: ${Object.keys(mockProposal.machine.states).join(', ')}` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `Pipelines: ${Object.keys(mockProposal.pipelines || {}).join(', ')}` });
         
         // Actually apply it so we can see it work
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── APPLYING MOCK PROPOSAL ─────` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `───── APPLYING MOCK PROPOSAL ─────` });
         setAppDef(mockProposal);
         setContext(mockProposal.initialContext);
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'SUCCESS', message: `✓ Counter app is now live! Try clicking the buttons.` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'SUCCESS', message: `✓ Counter app is now live! Try clicking the buttons.` });
       }
       
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error';
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'ERROR', message: `Validation error: ${msg}` });
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'ERROR', message: `Validation error: ${msg}` });
     }
     
-    addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `━━━ SIMULATION COMPLETE ━━━` });
+    addLog({ id: generateUUID(), timestamp: Date.now(), source: 'SIM', type: 'INFO', message: `━━━ SIMULATION COMPLETE ━━━` });
     setIsSynthesizing(false);
   };
 
@@ -325,64 +363,162 @@ export default function App() {
     setError(null);
     setVerificationReport(null);
     const startTime = Date.now();
-    addLog({ id: crypto.randomUUID(), timestamp: startTime, source: 'GUEST', type: 'INFO', message: `Analyzing intent: "${prompt}"...` });
+    
+    // ========================================================================
+    // OBSERVABILITY: Start trace for 100% transparency
+    // ========================================================================
+    const traceId = ObservabilityService.startTrace(
+      prompt, 
+      aiProvider.name, 
+      aiProvider.modelId
+    );
+    
+    addLog({ id: generateUUID(), timestamp: startTime, source: 'GUEST', type: 'INFO', message: `Analyzing intent: "${prompt}"...` });
 
     try {
       // 1. Cognition Phase (with execution feedback for self-correction)
       const feedback = extractExecutionFeedback(changeHistory);
+      
+      ObservabilityService.recordPhase('CONTEXT_ASSEMBLED', {
+        currentVersion: appDef.version,
+        contextKeys: Object.keys(context),
+        hasFeedback: !!feedback,
+        feedbackType: feedback?.failureType
+      }, `Context assembled: ${Object.keys(context).length} keys, feedback: ${feedback ? 'yes' : 'no'}`);
+      
       if (feedback) {
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'GUEST', type: 'WARN', message: `Providing feedback about previous failure: ${feedback.failureType}` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'GUEST', type: 'WARN', message: `Providing feedback about previous failure: ${feedback.failureType}` });
       }
       
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'GUEST', type: 'INFO', message: `Using AI provider: ${aiProvider.name} (${aiProvider.modelId})` });
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'GUEST', type: 'INFO', message: `Using AI provider: ${aiProvider.name} (${aiProvider.modelId})` });
+      
+      // Build system prompt for observability (capture what we send)
+      const systemPromptPreview = buildSystemPrompt(appDef, feedback || null, undefined);
+      ObservabilityService.recordPhase('SYSTEM_PROMPT_BUILT', {
+        length: systemPromptPreview.length,
+        preview: systemPromptPreview.substring(0, 500)
+      }, `System prompt built: ${systemPromptPreview.length} chars`);
+      
+      ObservabilityService.recordPhase('AI_REQUEST_SENT', {
+        provider: aiProvider.name,
+        model: aiProvider.modelId,
+        promptLength: prompt.length
+      }, `Request sent to ${aiProvider.name}/${aiProvider.modelId}`);
       
       let proposal: AppDefinition;
       try {
         proposal = await aiProvider.generateProposal({ ...appDef, initialContext: context }, prompt, feedback);
+        
+        // Capture raw response info
+        const rawJson = JSON.stringify(proposal);
+        ObservabilityService.recordPhase('AI_RESPONSE_RECEIVED', {
+          length: rawJson.length,
+          preview: rawJson.substring(0, 500),
+          version: proposal.version
+        }, `Response received: ${rawJson.length} chars, version ${proposal.version}`);
+        
       } catch (aiError) {
         const errorMsg = aiError instanceof Error ? aiError.message : 'Unknown AI error';
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'GUEST', type: 'ERROR', message: `AI Generation Failed: ${errorMsg}` });
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'GUEST', type: 'INFO', message: `Check browser console for raw AI response (search for [BEDROCK])` });
+        ObservabilityService.failTrace(aiError instanceof Error ? aiError : new Error(errorMsg), 'AI_REQUEST_SENT');
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'GUEST', type: 'ERROR', message: `AI Generation Failed: ${errorMsg}` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'GUEST', type: 'INFO', message: `Check browser console for raw AI response (search for [BEDROCK])` });
         throw aiError;
       }
       
+      ObservabilityService.recordPhase('RESPONSE_PARSED', {
+        proposal: proposal,
+        pipelineCount: Object.keys(proposal.pipelines || {}).length,
+        stateCount: Object.keys(proposal.machine?.states || {}).length
+      }, `Parsed: ${Object.keys(proposal.pipelines || {}).length} pipelines, ${Object.keys(proposal.machine?.states || {}).length} states`);
+      
       // Log the raw proposal for debugging
       console.log('[AI PROPOSAL]', JSON.stringify(proposal, null, 2));
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'GUEST', type: 'INFO', message: `Proposal generated: v${proposal.version}` });
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'GUEST', type: 'INFO', message: `View type: ${proposal.view?.type}, States: ${Object.keys(proposal.machine?.states || {}).join(', ')}` });
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'GUEST', type: 'INFO', message: `Proposal generated: v${proposal.version}` });
 
-      // 2. Verification Phase (The Gatekeeper)
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'INFO', message: `Running Trust Assurance Pipeline...` });
+      // TODO: Integrity Verification (Air Gap) - Future implementation
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'INFO', message: `Skipping signature verification (not yet implemented)...` });
+
+      // 3. Verification Phase (The Gatekeeper)
+      ObservabilityService.recordPhase('VALIDATION_STARTED', {}, 'Starting Trust Assurance Pipeline');
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'INFO', message: `Running Trust Assurance Pipeline...` });
       
-      const report = await verifyProposal(proposal);
+      const report = await verifyProposal(proposal, OPERATOR_REGISTRY);
+      
+      // Record individual validation phases
+      const structuralFails = report.checks.structural.filter(c => c.status === 'FAIL').map(c => c.message);
+      ObservabilityService.recordPhase('VALIDATION_STRUCTURAL', {
+        count: report.checks.structural.length,
+        passed: structuralFails.length === 0,
+        failures: structuralFails
+      }, `Structural: ${report.checks.structural.length} checks, ${structuralFails.length} failures`);
+      
+      const semanticFails = report.checks.semantic.filter(c => c.status === 'FAIL').map(c => c.message);
+      ObservabilityService.recordPhase('VALIDATION_SEMANTIC', {
+        count: report.checks.semantic.length,
+        passed: semanticFails.length === 0,
+        failures: semanticFails
+      }, `Semantic: ${report.checks.semantic.length} checks, ${semanticFails.length} failures`);
+      
       setVerificationReport(report);
 
-      // 2.5 Honesty Oracle - Semantic Attack Detection
+      // 3.5 Honesty Oracle - Semantic Attack Detection
       const honestyResult = runHonestyOracle(prompt, proposal, appDef);
+      
+      ObservabilityService.recordPhase('VALIDATION_HONESTY', {
+        passed: honestyResult.passed,
+        concerns: honestyResult.concerns,
+        promptKeywords: honestyResult.promptKeywords
+      }, `Honesty Oracle: ${honestyResult.passed ? 'PASSED' : 'FAILED'}, ${honestyResult.concerns.length} concerns`);
+      
       addLog({ 
-        id: crypto.randomUUID(), 
+        id: generateUUID(), 
         timestamp: Date.now(), 
         source: 'VALIDATOR', 
         type: honestyResult.passed ? (honestyResult.concerns.length > 0 ? 'WARN' : 'SUCCESS') : 'ERROR', 
         message: formatHonestyReport(honestyResult)
       });
 
+      // Aggregate all failures for observability
+      const allFails = [...structuralFails, ...semanticFails, ...honestyResult.concerns];
+      ObservabilityService.recordPhase('VALIDATION_COMPLETE', {
+        passed: report.passed,
+        score: report.score,
+        structuralCount: report.checks.structural.length,
+        semanticCount: report.checks.semantic.length,
+        honestyCount: honestyResult.concerns.length + (honestyResult.passed ? 0 : 1),
+        failedChecks: allFails
+      }, `Validation complete: score ${report.score}/100, ${report.passed ? 'PASSED' : 'FAILED'}`);
+
       const diff = computeDiff(appDef, proposal);
       
       // Calculate Migration Preview (Lens.get)
       const migrationResult = migrateContext(context, proposal);
       
+      ObservabilityService.recordPhase('MIGRATION_COMPUTED', {
+        preserved: migrationResult.stats.preserved,
+        dropped: migrationResult.stats.dropped,
+        added: migrationResult.stats.added,
+        ghost: migrationResult.stats.ghost,
+        ghostKeys: migrationResult.stats.ghostKeys
+      }, `Migration: preserved ${migrationResult.stats.preserved}, dropped ${migrationResult.stats.dropped}, ghost ${migrationResult.stats.ghost}`);
+      
       // PROOF OF PRESERVATION: Verify Lens Laws
       const lensCheck = verifyLensLaws(context, proposal);
+      
+      ObservabilityService.recordPhase('LENS_LAWS_VERIFIED', {
+        satisfied: lensCheck.satisfied,
+        violation: lensCheck.violation
+      }, lensCheck.satisfied ? 'Lens Laws Satisfied' : `VIOLATION: ${lensCheck.violation}`);
+      
       if (!lensCheck.satisfied) {
-          addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'WARN', message: `LENS LAW VIOLATION: ${lensCheck.violation}` });
+          addLog({ id: generateUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'WARN', message: `LENS LAW VIOLATION: ${lensCheck.violation}` });
       } else {
-          addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'SUCCESS', message: `Lens Laws Satisfied (Bidirectional Integrity Verified)` });
+          addLog({ id: generateUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'SUCCESS', message: `Lens Laws Satisfied (Bidirectional Integrity Verified)` });
       }
 
       // Create Full Change Record
       const record: ChangeRecord = {
-          id: crypto.randomUUID(),
+          id: generateUUID(),
           timestamp: Date.now(),
           prompt,
           version: proposal.version,
@@ -399,39 +535,74 @@ export default function App() {
       };
 
       if (!report.passed) {
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'ERROR', message: `Verification Failed (Score: ${report.score})` });
-        setError(`Proposal Rejected: Critical Verification Failure.`);
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'ERROR', message: `Verification Failed (Score: ${report.score})` });
+        
+        const failures = [
+          ...report.checks.structural, 
+          ...report.checks.semantic,
+          ...report.checks.honesty
+        ].filter(c => c.status === 'FAIL');
+        
+        const topFailure = failures.length > 0 
+          ? failures[0].message 
+          : 'Critical Verification Failure.';
+          
+        setError(`Proposal Rejected: ${topFailure}`);
         setChangeHistory(prev => [record, ...prev]);
+        
+        // Complete trace as rejected
+        ObservabilityService.rejectTrace(topFailure);
       } else {
         if (report.score < 100) {
-            addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'WARN', message: `Proposal Accepted with Warnings (Score: ${report.score})` });
+            addLog({ id: generateUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'WARN', message: `Proposal Accepted with Warnings (Score: ${report.score})` });
         } else {
-            addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'SUCCESS', message: `Proposal Verified (Score: 100)` });
+            addLog({ id: generateUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'SUCCESS', message: `Proposal Verified (Score: 100)` });
         }
 
-        // 3. Actuation Phase (Hot Swap with Migration)
+        // 4. Actuation Phase (Hot Swap with Migration)
+        ObservabilityService.recordPhase('PROPOSAL_APPLIED', {
+          version: proposal.version,
+          preservedKeys: migrationResult.stats.preserved
+        }, `Applied ${proposal.version}, preserved ${migrationResult.stats.preserved} keys`);
+        
         setContext(migrationResult.context);
         setAppDef(proposal);
         setPrompt('');
-        addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: `Migrated to v${proposal.version}. Preserved ${migrationResult.stats.preserved} keys.` });
+        addLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: `Migrated to v${proposal.version}. Preserved ${migrationResult.stats.preserved} keys.` });
         
         setChangeHistory(prev => [record, ...prev]);
+        
+        // Complete trace as success
+        ObservabilityService.completeTrace(proposal.version);
       }
 
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Unknown error';
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `Synthesis Error: ${message}` });
+      
+      // Fail the trace if not already failed
+      if (ObservabilityService.getCurrentTrace()) {
+        ObservabilityService.failTrace(
+          e instanceof Error ? e : new Error(message), 
+          'FLOW_ERROR'
+        );
+      }
+      
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `Synthesis Error: ${message}` });
       setError("The Guest Intelligence failed to produce a valid response.");
     } finally {
       setIsSynthesizing(false);
     }
   };
+  
+// ... (rest of the component)
+
 
   const handleReplay = useCallback(async (record: ChangeRecord) => {
-      addLog({ id: crypto.randomUUID(), timestamp: Date.now(), source: 'HOST', type: 'WARN', message: `REPLAYING ARCHITECTURE: v${record.version}` });
-      
+      if (!manifest) return;
+      addLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'WARN', message: `REPLAYING ARCHITECTURE: v${record.version}` });
+
       // Re-run validation to prove determinism
-      const report = await verifyProposal(record.newDef);
+      const report = await verifyProposal(record.newDef, OPERATOR_REGISTRY);
       
       // Hot swap to the recorded definition
       setAppDef(record.newDef);
@@ -442,7 +613,7 @@ export default function App() {
 
       setVerificationReport(report); // Show the re-verified report
       setViewMode('control'); // Switch back to control view to see effect
-  }, [context, addLog]);
+  }, [context, addLog, manifest]);
 
   const handleReset = () => {
       Persistence.reset();
@@ -494,17 +665,25 @@ export default function App() {
                 onClick={() => setViewMode('control')}
                 className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 ${viewMode === 'control' ? 'bg-zinc-800 text-zinc-200 border-b-2 border-indigo-500' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
-                <Terminal className="w-3 h-3" /> Control Plane
+                <Terminal className="w-3 h-3" /> Control
+            </button>
+            <button 
+                onClick={() => setViewMode('flow')}
+                className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 ${viewMode === 'flow' ? 'bg-zinc-800 text-zinc-200 border-b-2 border-cyan-500' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+                <Eye className="w-3 h-3" /> Flow
             </button>
             <button 
                 onClick={() => setViewMode('lab')}
                 className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 ${viewMode === 'lab' ? 'bg-zinc-800 text-zinc-200 border-b-2 border-emerald-500' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
-                <Microscope className="w-3 h-3" /> Lab Console
+                <Microscope className="w-3 h-3" /> Lab
             </button>
         </div>
 
-        {viewMode === 'lab' ? (
+        {viewMode === 'flow' ? (
+            <FlowViewer maxHeight="calc(100vh - 60px)" />
+        ) : viewMode === 'lab' ? (
             <LabConsole 
                 metrics={metrics} 
                 history={changeHistory} 
@@ -593,9 +772,9 @@ export default function App() {
                         <textarea
                             value={prompt}
                             onChange={(e) => setPrompt(e.target.value)}
-                            placeholder="Describe a change (e.g., 'Add a task list', 'Make the background red')..."
+                            placeholder={!manifest ? "Loading Operator Manifest..." : "Describe a change (e.g., 'Add a task list', 'Make the background red')..."}
                             className="w-full bg-black border border-zinc-700 rounded-lg p-3 pb-8 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 resize-none h-24"
-                            disabled={isSynthesizing}
+                            disabled={isSynthesizing || !manifest}
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter' && !e.shiftKey) {
                                     e.preventDefault();
@@ -613,10 +792,10 @@ export default function App() {
                         {/* Simulate button - tests the flow without calling AI */}
                         <button
                             onClick={handleSimulate}
-                            disabled={isSynthesizing}
+                            disabled={isSynthesizing || !manifest}
                             title="Simulate: Test the flow with a mock response (no API call)"
                             className={`absolute bottom-3 right-14 p-2 rounded-md flex items-center justify-center transition-all ${
-                                isSynthesizing 
+                                (isSynthesizing || !manifest)
                                 ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed' 
                                 : 'bg-amber-600 text-white hover:bg-amber-500 shadow-lg shadow-amber-500/20'
                             }`}
@@ -625,10 +804,10 @@ export default function App() {
                         </button>
                         <button
                             onClick={handleSynthesize}
-                            disabled={isSynthesizing || !prompt.trim()}
+                            disabled={isSynthesizing || !prompt.trim() || !manifest}
                             title="Synthesize: Call AI to generate proposal"
                             className={`absolute bottom-3 right-3 p-2 rounded-md flex items-center justify-center transition-all ${
-                                isSynthesizing 
+                                (isSynthesizing || !prompt.trim() || !manifest)
                                 ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed' 
                                 : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-lg shadow-indigo-500/20'
                             }`}

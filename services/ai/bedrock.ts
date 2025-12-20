@@ -50,7 +50,7 @@ const BEDROCK_MODELS: Record<string, {
       max_tokens: 8192,
       system: systemPrompt,
       messages: [
-        { role: "user", content: `${userPrompt}\n\nIMPORTANT: Respond with ONLY a complete JSON AppDefinition containing ALL required fields:\n- version (string)\n- initialContext (object)\n- pipelines (object)\n- machine (object with "initial" and "states")\n- view (object with "id", "type", and UI tree)\n- testVectors (array)\n\nNo markdown code blocks, just raw JSON.` }
+        { role: "user", content: userPrompt }
       ]
     }),
     parseResponse: (body: unknown) => {
@@ -198,8 +198,14 @@ export class BedrockProvider implements AIProviderWithCapabilities {
     feedback?: ExecutionFeedback | null
   ): Promise<AppDefinition> {
     const systemPrompt = buildSystemPrompt(currentDef, feedback, this.systemPromptAdditions);
-    const userPrompt = `USER REQUEST:\n"${prompt}"`;
+    
+    // Simple user prompt with delimiter (matching system prompt format)
+    const userPrompt = `<<<USER_REQUEST>>>
+${prompt}
+<<<END_USER_REQUEST>>>`;
     const requestBody = this.modelConfig.formatRequest(systemPrompt, userPrompt);
+    
+    console.log('[BEDROCK] System prompt length:', systemPrompt.length);
 
     try {
       let responseBody: unknown;

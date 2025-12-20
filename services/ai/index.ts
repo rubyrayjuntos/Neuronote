@@ -27,6 +27,7 @@ export { extractExecutionFeedback } from './types';
 export { GeminiProvider, createGeminiProvider, buildSystemPrompt } from './gemini';
 export { BedrockProvider, createBedrockClaudeProvider, createBedrockLlamaProvider, createBedrockMistralProvider } from './bedrock';
 export { GroqProvider, createGroqProvider } from './groq';
+export { buildCapabilityPrompt, buildUserPrompt } from './promptBuilder';
 export type { BedrockConfig } from './bedrock';
 export type { GroqConfig } from './groq';
 
@@ -105,7 +106,6 @@ export function createProvider(
       return new GroqProvider({
         apiKey,
         modelId: config?.modelId,
-        systemPromptAdditions: config?.systemPromptAdditions,
       });
     }
 
@@ -164,7 +164,7 @@ export const AVAILABLE_PROVIDERS: Array<{
   {
     type: 'groq',
     name: 'Groq (Free)',
-    description: 'Llama 3.1 70B - Ultra-fast, free tier available',
+    description: 'Llama 3.3 70B - Ultra-fast, free tier available',
     requiresApiKey: true,
     requiresAws: false,
   },

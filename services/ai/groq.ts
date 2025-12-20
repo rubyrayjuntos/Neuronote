@@ -6,7 +6,7 @@ import {
   ExecutionFeedback, 
   ModelCapabilities 
 } from "./types";
-import { buildSystemPrompt } from "./gemini";
+import { buildCapabilityPrompt, buildUserPrompt } from "./promptBuilder";
 
 /**
  * Groq API configuration.
@@ -14,17 +14,23 @@ import { buildSystemPrompt } from "./gemini";
 export interface GroqConfig extends AIProviderConfig {
   /** Groq API key */
   apiKey: string;
-  /** Model to use (default: llama-3.1-70b-versatile) */
+  /** Model to use (default: gpt-oss-120b - best for JSON schema compliance) */
   modelId?: string;
 }
 
 /**
- * Available Groq models
+ * Available Groq models (updated Dec 2025)
+ * Default: gpt-oss-120b - best at following JSON schema instructions
  */
 const GROQ_MODELS = {
-  'llama-3.1-70b': {
-    modelId: 'llama-3.1-70b-versatile',
-    name: 'Llama 3.1 70B',
+  'gpt-oss-120b': {
+    modelId: 'openai/gpt-oss-120b',
+    name: 'GPT-OSS 120B (Recommended)',
+    contextWindow: 131_072,
+  },
+  'llama-3.3-70b': {
+    modelId: 'llama-3.3-70b-versatile',
+    name: 'Llama 3.3 70B',
     contextWindow: 131_072,
   },
   'llama-3.1-8b': {
@@ -32,17 +38,13 @@ const GROQ_MODELS = {
     name: 'Llama 3.1 8B',
     contextWindow: 131_072,
   },
-  'mixtral-8x7b': {
-    modelId: 'mixtral-8x7b-32768',
-    name: 'Mixtral 8x7B',
-    contextWindow: 32_768,
-  },
-  'gemma2-9b': {
-    modelId: 'gemma2-9b-it',
-    name: 'Gemma 2 9B',
-    contextWindow: 8_192,
+  'qwen3-32b': {
+    modelId: 'qwen/qwen3-32b',
+    name: 'Qwen3 32B',
+    contextWindow: 131_072,
   },
 };
+
 
 /**
  * Validates that a parsed object has the minimum required shape of an AppDefinition.
@@ -69,18 +71,59 @@ function validateAppDefinitionShape(obj: unknown): obj is AppDefinition {
 
 /**
  * Extract JSON from potentially markdown-wrapped response.
+ * Handles: markdown code blocks, extra text before/after JSON, nested braces.
  */
 function extractJson(text: string): string {
-  // Try to extract from markdown code block
+  // First try: markdown code block
   const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (jsonMatch) {
     return jsonMatch[1].trim();
   }
   
-  // Try to find JSON object directly
+  // Second try: find balanced braces
   const firstBrace = text.indexOf('{');
+  if (firstBrace === -1) {
+    return text;
+  }
+  
+  // Count braces to find matching closing brace
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  
+  for (let i = firstBrace; i < text.length; i++) {
+    const char = text[i];
+    
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\' && inString) {
+      escapeNext = true;
+      continue;
+    }
+    
+    if (char === '"' && !escapeNext) {
+      inString = !inString;
+      continue;
+    }
+    
+    if (!inString) {
+      if (char === '{') depth++;
+      if (char === '}') {
+        depth--;
+        if (depth === 0) {
+          // Found matching closing brace
+          return text.slice(firstBrace, i + 1);
+        }
+      }
+    }
+  }
+  
+  // Fallback: use lastIndexOf (original behavior)
   const lastBrace = text.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+  if (lastBrace > firstBrace) {
     return text.slice(firstBrace, lastBrace + 1);
   }
   
@@ -89,11 +132,6 @@ function extractJson(text: string): string {
 
 /**
  * Groq AI Provider.
- * 
- * Uses Groq's ultra-fast inference API with Llama 3.1, Mixtral, and other models.
- * Free tier includes generous rate limits.
- * 
- * API Docs: https://console.groq.com/docs/quickstart
  */
 export class GroqProvider implements AIProviderWithCapabilities {
   readonly name: string;
@@ -101,20 +139,18 @@ export class GroqProvider implements AIProviderWithCapabilities {
   readonly capabilities: ModelCapabilities;
 
   private readonly apiKey: string;
-  private readonly systemPromptAdditions?: string;
 
   constructor(config: GroqConfig) {
     if (!config.apiKey) {
       throw new Error("Groq API key required");
     }
 
-    const modelKey = config.modelId || 'llama-3.1-70b';
-    const modelConfig = GROQ_MODELS[modelKey as keyof typeof GROQ_MODELS] || GROQ_MODELS['llama-3.1-70b'];
+    const modelKey = config.modelId || 'gpt-oss-120b';
+    const modelConfig = GROQ_MODELS[modelKey as keyof typeof GROQ_MODELS] || GROQ_MODELS['gpt-oss-120b'];
 
     this.name = `Groq ${modelConfig.name}`;
     this.modelId = modelConfig.modelId;
     this.apiKey = config.apiKey;
-    this.systemPromptAdditions = config.systemPromptAdditions;
     
     this.capabilities = {
       structuredOutput: true,
@@ -129,8 +165,19 @@ export class GroqProvider implements AIProviderWithCapabilities {
     prompt: string,
     feedback?: ExecutionFeedback | null
   ): Promise<AppDefinition> {
-    const systemPrompt = buildSystemPrompt(currentDef, feedback, this.systemPromptAdditions);
-    const userPrompt = `USER REQUEST:\n"${prompt}"\n\nIMPORTANT: Respond with ONLY a complete JSON AppDefinition containing ALL required fields:\n- version (string)\n- initialContext (object)\n- pipelines (object)\n- machine (object with "initial" and "states")\n- view (object with "id", "type", and UI tree)\n- testVectors (array)\n\nNo markdown code blocks, no explanations, just raw JSON.`;
+    // Use the new manifest-driven prompt builder
+    const systemPrompt = buildCapabilityPrompt();
+    
+    // Build user prompt with current def, request, and any feedback
+    const userPrompt = buildUserPrompt(
+      currentDef,
+      prompt,
+      feedback ? {
+        version: feedback.failedVersion,
+        error: feedback.errorMessage,
+        failures: feedback.validationFailures
+      } : null
+    );
 
     try {
       console.log('[GROQ] Sending request to', this.modelId);
@@ -149,6 +196,7 @@ export class GroqProvider implements AIProviderWithCapabilities {
           ],
           temperature: 0.1,
           max_tokens: 8192,
+          response_format: { type: "json_object" },
         }),
       });
 
@@ -159,29 +207,28 @@ export class GroqProvider implements AIProviderWithCapabilities {
       }
 
       const data = await response.json();
-      console.log('[GROQ] Response received, usage:', data.usage);
-      
       const rawText = data.choices?.[0]?.message?.content;
       if (!rawText) {
         throw new Error("Empty response from Groq");
       }
 
-      console.log('[GROQ] Raw text length:', rawText.length);
-      console.log('[GROQ] Raw text (first 500):', rawText.substring(0, 500));
+      console.log('[GROQ] Raw response length:', rawText.length);
+      console.log('[GROQ] Raw response (first 500 chars):', rawText.slice(0, 500));
       
       const jsonText = extractJson(rawText);
       console.log('[GROQ] Extracted JSON length:', jsonText.length);
-
-      // Parse with error handling
+      
       let parsed: unknown;
       try {
         parsed = JSON.parse(jsonText);
       } catch (parseError) {
-        console.error('[GROQ] JSON parse failed. Full text:', rawText);
+        console.error('[GROQ] JSON parse failed.');
+        console.error('[GROQ] Raw text:', rawText);
+        console.error('[GROQ] Extracted JSON:', jsonText);
+        console.error('[GROQ] Error position info:', parseError);
         throw new Error(`AI returned invalid JSON: ${parseError instanceof Error ? parseError.message : 'Parse failed'}`);
       }
 
-      // Validate shape
       if (!validateAppDefinitionShape(parsed)) {
         console.error('[GROQ] Shape validation failed:', parsed);
         throw new Error("AI response missing required fields (version, initialContext, machine, view)");
@@ -198,7 +245,7 @@ export class GroqProvider implements AIProviderWithCapabilities {
 }
 
 /**
- * Create a Groq provider with Llama 3.1 70B (default).
+ * Create a Groq provider.
  */
 export function createGroqProvider(apiKey?: string, modelId?: string): AIProvider {
   const key = apiKey ?? import.meta.env.VITE_GROQ_API_KEY;

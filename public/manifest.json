@@ -1,0 +1,662 @@
+{
+  "version": "1.0.0",
+  "timestamp": "2025-12-18T23:45:57.784Z",
+  "primitives": {
+    "text": [
+      {
+        "op": "Text.ToUpper",
+        "category": "Text",
+        "inputs": [
+          {
+            "name": "text",
+            "type": "string"
+          }
+        ],
+        "output": "string",
+        "description": "Converts text to uppercase. Requires clean input.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "inputTaint": 0,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "Text.Length",
+        "category": "Text",
+        "inputs": [
+          {
+            "name": "text",
+            "type": "string"
+          }
+        ],
+        "output": "number",
+        "description": "Returns the length of text",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "Text.RegexMatch",
+        "category": "Text",
+        "inputs": [
+          {
+            "name": "text",
+            "type": "string"
+          },
+          {
+            "name": "pattern",
+            "type": "string"
+          }
+        ],
+        "output": "string",
+        "description": "Extracts first regex match from text. Output is tainted.",
+        "example": "Text.RegexMatch('hello123', '\\d+') → '123'",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      },
+      {
+        "op": "Text.Join",
+        "category": "Text",
+        "inputs": [
+          {
+            "name": "list",
+            "type": "array"
+          },
+          {
+            "name": "separator",
+            "type": "string"
+          }
+        ],
+        "output": "string",
+        "description": "Joins array elements into text with separator. Output is tainted.",
+        "example": "Text.Join(['a', 'b', 'c'], '-') → 'a-b-c'",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      }
+    ],
+    "sanitizer": [
+      {
+        "op": "Sanitizer.StripHTML",
+        "category": "Sanitizer",
+        "inputs": [
+          {
+            "name": "text",
+            "type": "string"
+          }
+        ],
+        "output": "string",
+        "description": "Removes HTML tags from text to prevent XSS. Downgrades taint to 0.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "inputTaint": 2,
+          "outputTaint": 0
+        }
+      }
+    ],
+    "math": [
+      {
+        "op": "Math.Add",
+        "category": "Math",
+        "inputs": [
+          {
+            "name": "a",
+            "type": "number"
+          },
+          {
+            "name": "b",
+            "type": "number"
+          }
+        ],
+        "output": "number",
+        "description": "Adds two numbers",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "commutative": true,
+          "associative": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "Math.Subtract",
+        "category": "Math",
+        "inputs": [
+          {
+            "name": "a",
+            "type": "number"
+          },
+          {
+            "name": "b",
+            "type": "number"
+          }
+        ],
+        "output": "number",
+        "description": "Subtracts b from a",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "Math.Multiply",
+        "category": "Math",
+        "inputs": [
+          {
+            "name": "a",
+            "type": "number"
+          },
+          {
+            "name": "b",
+            "type": "number"
+          }
+        ],
+        "output": "number",
+        "description": "Multiplies two numbers",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "commutative": true,
+          "associative": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "Math.Divide",
+        "category": "Math",
+        "inputs": [
+          {
+            "name": "a",
+            "type": "number"
+          },
+          {
+            "name": "b",
+            "type": "number"
+          }
+        ],
+        "output": "number",
+        "description": "Divides a by b (returns Infinity for division by zero)",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "Math.Threshold",
+        "category": "Math",
+        "inputs": [
+          {
+            "name": "value",
+            "type": "number"
+          },
+          {
+            "name": "threshold",
+            "type": "number"
+          }
+        ],
+        "output": "number",
+        "description": "Returns 1 if value > threshold, else 0",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
+      }
+    ],
+    "logic": [
+      {
+        "op": "Logic.If",
+        "category": "Logic",
+        "inputs": [
+          {
+            "name": "condition",
+            "type": "boolean"
+          },
+          {
+            "name": "trueValue",
+            "type": "any"
+          },
+          {
+            "name": "falseValue",
+            "type": "any"
+          }
+        ],
+        "output": "any",
+        "description": "Returns trueValue if condition is truthy, else falseValue",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      }
+    ],
+    "utility": [
+      {
+        "op": "Utility.JsonPath",
+        "category": "Utility",
+        "inputs": [
+          {
+            "name": "json",
+            "type": "json"
+          },
+          {
+            "name": "path",
+            "type": "string"
+          }
+        ],
+        "output": "any",
+        "description": "Extracts value from JSON using dot notation path",
+        "example": "JsonPath({a: {b: 1}}, 'a.b') → 1",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      }
+    ],
+    "list": [
+      {
+        "op": "List.Map",
+        "category": "List",
+        "inputs": [
+          {
+            "name": "list",
+            "type": "array"
+          }
+        ],
+        "output": "array",
+        "description": "Maps array elements to strings",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      },
+      {
+        "op": "List.Filter",
+        "category": "List",
+        "inputs": [
+          {
+            "name": "list",
+            "type": "array"
+          }
+        ],
+        "output": "array",
+        "description": "Filters array to only truthy elements",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      },
+      {
+        "op": "List.Sort",
+        "category": "List",
+        "inputs": [
+          {
+            "name": "list",
+            "type": "array"
+          }
+        ],
+        "output": "array",
+        "description": "Sorts array elements",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      },
+      {
+        "op": "List.Take",
+        "category": "List",
+        "inputs": [
+          {
+            "name": "list",
+            "type": "array"
+          },
+          {
+            "name": "count",
+            "type": "number"
+          }
+        ],
+        "output": "array",
+        "description": "Takes first n elements from array",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      },
+      {
+        "op": "List.Reduce",
+        "category": "List",
+        "inputs": [
+          {
+            "name": "list",
+            "type": "array"
+          },
+          {
+            "name": "initial",
+            "type": "any"
+          },
+          {
+            "name": "operation",
+            "type": "string",
+            "description": "sum|product|concat|min|max|count"
+          }
+        ],
+        "output": "any",
+        "description": "Reduces array to single value using named operation",
+        "example": "List.Reduce([1,2,3], 0, 'sum') → 6",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      },
+      {
+        "op": "List.FoldN",
+        "category": "List",
+        "inputs": [
+          {
+            "name": "n",
+            "type": "number",
+            "description": "Number of iterations (capped at 1000)"
+          },
+          {
+            "name": "initial",
+            "type": "number"
+          },
+          {
+            "name": "step",
+            "type": "number"
+          }
+        ],
+        "output": "number",
+        "description": "Bounded iteration: returns initial + (step × n). Max 1000 iterations.",
+        "example": "List.FoldN(5, 0, 2) → 10",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "List.Append",
+        "category": "List",
+        "inputs": [
+          {
+            "name": "list",
+            "type": "array"
+          },
+          {
+            "name": "item",
+            "type": "any"
+          }
+        ],
+        "output": "array",
+        "description": "Appends an item to a list and returns the new list",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      }
+    ],
+    "image": [
+      {
+        "op": "Image.Grayscale",
+        "category": "Image",
+        "inputs": [
+          {
+            "name": "image",
+            "type": "image",
+            "description": "DataURL of image"
+          }
+        ],
+        "output": "image",
+        "description": "Converts image to grayscale",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 10,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      },
+      {
+        "op": "Image.Invert",
+        "category": "Image",
+        "inputs": [
+          {
+            "name": "image",
+            "type": "image",
+            "description": "DataURL of image"
+          }
+        ],
+        "output": "image",
+        "description": "Inverts image colors",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 10,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      },
+      {
+        "op": "Image.EdgeDetect",
+        "category": "Image",
+        "inputs": [
+          {
+            "name": "image",
+            "type": "image",
+            "description": "DataURL of image"
+          }
+        ],
+        "output": "image",
+        "description": "Performs edge detection on image",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 10,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      },
+      {
+        "op": "Image.Resize",
+        "category": "Image",
+        "inputs": [
+          {
+            "name": "image",
+            "type": "image",
+            "description": "DataURL of image"
+          }
+        ],
+        "output": "image",
+        "description": "Resizes image to fit bounds",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 10,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      },
+      {
+        "op": "Image.Threshold",
+        "category": "Image",
+        "inputs": [
+          {
+            "name": "image",
+            "type": "image",
+            "description": "DataURL of image"
+          }
+        ],
+        "output": "image",
+        "description": "Converts image to black/white",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 10,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      }
+    ],
+    "audio": [
+      {
+        "op": "Audio.FFT",
+        "category": "Audio",
+        "inputs": [
+          {
+            "name": "audio",
+            "type": "audio",
+            "description": "DataURL of audio"
+          }
+        ],
+        "output": "array",
+        "description": "Performs FFT on audio, returns frequency spectrum array",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 10,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      },
+      {
+        "op": "Audio.PeakDetect",
+        "category": "Audio",
+        "inputs": [
+          {
+            "name": "audio",
+            "type": "audio",
+            "description": "DataURL of audio"
+          }
+        ],
+        "output": "boolean",
+        "description": "Detects if audio has peak volume (>50% amplitude)",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 10,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
+      }
+    ]
+  }
+}

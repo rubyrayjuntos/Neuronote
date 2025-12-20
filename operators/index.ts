@@ -5,12 +5,12 @@
  * All consumers should import from here, not directly from registry.ts
  */
 
-export * from './types';
-export { OPERATOR_REGISTRY } from './registry';
+export * from './types.ts';
+export { OPERATOR_REGISTRY } from './registry.ts';
 
-import { OPERATOR_REGISTRY } from './registry';
-import { OperatorDefinition } from './types';
-import { OperatorType, OperatorSchema, DataType } from '../types';
+import { OperatorDefinition } from './types.ts';
+import { OPERATOR_REGISTRY } from './registry.ts';
+import { OperatorType, OperatorSchema, DataType } from '../types.ts';
 
 // ============================================================================
 // QUERY FUNCTIONS
@@ -20,43 +20,43 @@ import { OperatorType, OperatorSchema, DataType } from '../types';
  * Get list of all allowed operator names.
  * Used by validator for allowlist checking.
  */
-export function getAllowedOperators(): string[] {
-  return Object.keys(OPERATOR_REGISTRY);
+export function getAllowedOperators(registry: Record<string, OperatorDefinition>): string[] {
+  return Object.keys(registry);
 }
 
 /**
  * Get operator definition by name.
  */
-export function getOperator(op: string): OperatorDefinition | undefined {
-  return OPERATOR_REGISTRY[op];
+export function getOperator(registry: Record<string, OperatorDefinition>, op: string): OperatorDefinition | undefined {
+  return registry[op];
 }
 
 /**
  * Check if an operator exists.
  */
-export function isValidOperator(op: string): boolean {
-  return op in OPERATOR_REGISTRY;
+export function isValidOperator(registry: Record<string, OperatorDefinition>, op: string): boolean {
+  return op in registry;
 }
 
 /**
  * Get all operators in a category.
  */
-export function getOperatorsByCategory(category: OperatorDefinition['category']): OperatorDefinition[] {
-  return Object.values(OPERATOR_REGISTRY).filter(def => def.category === category);
+export function getOperatorsByCategory(registry: Record<string, OperatorDefinition>, category: OperatorDefinition['category']): OperatorDefinition[] {
+  return Object.values(registry).filter(def => def.category === category);
 }
 
 /**
  * Get all Tier 1 (sync, pure) operators.
  */
-export function getTier1Operators(): OperatorDefinition[] {
-  return Object.values(OPERATOR_REGISTRY).filter(def => def.tier === 1);
+export function getTier1Operators(registry: Record<string, OperatorDefinition>): OperatorDefinition[] {
+  return Object.values(registry).filter(def => def.tier === 1);
 }
 
 /**
  * Get all Tier 2 (async, metered) operators.
  */
-export function getTier2Operators(): OperatorDefinition[] {
-  return Object.values(OPERATOR_REGISTRY).filter(def => def.tier === 2);
+export function getTier2Operators(registry: Record<string, OperatorDefinition>): OperatorDefinition[] {
+  return Object.values(registry).filter(def => def.tier === 2);
 }
 
 // ============================================================================
@@ -66,12 +66,13 @@ export function getTier2Operators(): OperatorDefinition[] {
 /**
  * Generate operator documentation for AI system prompt.
  * This is auto-generated from the registry - no manual sync needed.
+ * @param registry - Optional, defaults to OPERATOR_REGISTRY
  */
-export function generateOperatorDocs(): string {
-  const categories = ['Text', 'Math', 'Image', 'Audio', 'List', 'Logic', 'Utility'] as const;
+export function generateOperatorDocs(registry: Record<string, OperatorDefinition> = OPERATOR_REGISTRY): string {
+  const categories = ['Text', 'Math', 'Image', 'Audio', 'List', 'Logic', 'Utility', 'Sanitizer'] as const;
   
   const sections = categories.map(category => {
-    const ops = getOperatorsByCategory(category);
+    const ops = getOperatorsByCategory(registry, category);
     if (ops.length === 0) return '';
     
     const tierNote = ops.some(o => o.tier === 2) ? ' (Tier 2 - Async/Metered)' : '';
@@ -91,8 +92,8 @@ export function generateOperatorDocs(): string {
 /**
  * Generate a compact operator list for AI.
  */
-export function generateOperatorList(): string {
-  return Object.keys(OPERATOR_REGISTRY).map(op => `'${op}'`).join(', ');
+export function generateOperatorList(registry: Record<string, OperatorDefinition>): string {
+  return Object.keys(registry).map(op => `'${op}'`).join(', ');
 }
 
 // ============================================================================
@@ -104,10 +105,10 @@ export function generateOperatorList(): string {
  * Used by validator.ts and constants.ts for backward compatibility.
  * @alias getOperatorRegistry (for constants.ts compatibility)
  */
-export function getLegacyRegistry(): Record<string, OperatorSchema> {
+export function getLegacyRegistry(registry: Record<string, OperatorDefinition>): Record<string, OperatorSchema> {
   const legacy: Record<string, OperatorSchema> = {};
   
-  for (const [op, def] of Object.entries(OPERATOR_REGISTRY)) {
+  for (const [op, def] of Object.entries(registry)) {
     legacy[op] = {
       op: def.op as OperatorType,
       inputs: def.inputs.map(i => ({ name: i.name, type: i.type as DataType })),
@@ -120,9 +121,6 @@ export function getLegacyRegistry(): Record<string, OperatorSchema> {
   return legacy;
 }
 
-// Alias for constants.ts compatibility
-export const getOperatorRegistry = getLegacyRegistry;
-
 // ============================================================================
 // IMPLEMENTATION HELPERS (for Worker)
 // ============================================================================
@@ -131,28 +129,61 @@ export const getOperatorRegistry = getLegacyRegistry;
  * Get the implementation function for an operator.
  * Returns undefined if operator doesn't exist.
  */
-export function getOperatorImpl(op: string): ((inputs: unknown[]) => unknown | Promise<unknown>) | undefined {
-  return OPERATOR_REGISTRY[op]?.impl;
+export function getOperatorImpl(registry: Record<string, OperatorDefinition>, op: string): ((inputs: unknown[]) => unknown | Promise<unknown>) | undefined {
+  return registry[op]?.impl;
 }
 
 /**
  * Check if an operator is async.
  */
-export function isAsyncOp(op: string): boolean {
-  return OPERATOR_REGISTRY[op]?.async ?? false;
+export function isAsyncOp(registry: Record<string, OperatorDefinition>, op: string): boolean {
+  return registry[op]?.async ?? false;
 }
 
 /**
  * Get all sync operator implementations (for Worker).
  */
-export function getSyncOperatorImpls(): Record<string, (inputs: unknown[]) => unknown> {
+export function getSyncOperatorImpls(registry: Record<string, OperatorDefinition>): Record<string, (inputs: unknown[]) => unknown> {
   const impls: Record<string, (inputs: unknown[]) => unknown> = {};
   
-  for (const [op, def] of Object.entries(OPERATOR_REGISTRY)) {
+  for (const [op, def] of Object.entries(registry)) {
     if (!def.async) {
       impls[op] = def.impl as (inputs: unknown[]) => unknown;
     }
   }
   
   return impls;
+}
+
+// ============================================================================
+// WORKER CODE GENERATION
+// ============================================================================
+
+/**
+ * Generate JavaScript source code for all Tier 1 (sync) operators.
+ * This is injected into the Worker blob at boot time.
+ * 
+ * @param registry - The operator registry
+ * @returns JavaScript source code defining TIER1_OPERATORS object
+ */
+export function generateTier1OperatorsSource(registry: Record<string, OperatorDefinition> = OPERATOR_REGISTRY): string {
+  const tier1Ops = Object.entries(registry)
+    .filter(([_, def]) => def.tier === 1 && !def.async)
+    .map(([op, def]) => {
+      // Convert the implementation function to source code string
+      const implSource = def.impl.toString();
+      return `  '${op}': ${implSource}`;
+    });
+  
+  return `const TIER1_OPERATORS = {\n${tier1Ops.join(',\n')}\n};`;
+}
+
+/**
+ * Get the list of Tier 2 (async) operator names.
+ * Tier 2 operators have special implementations in the Worker (OffscreenCanvas, etc.)
+ */
+export function getTier2OperatorNames(registry: Record<string, OperatorDefinition> = OPERATOR_REGISTRY): string[] {
+  return Object.entries(registry)
+    .filter(([_, def]) => def.tier === 2 || def.async)
+    .map(([op, _]) => op);
 }

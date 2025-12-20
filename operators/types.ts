@@ -8,29 +8,35 @@
 /**
  * Data types that can flow through pipelines.
  */
-export type DataType = 'string' | 'number' | 'boolean' | 'json' | 'image' | 'audio' | 'array' | 'any';
+export type DataType = 'string' | 'number' | 'boolean' | 'json' | 'image' | 'audio' | 'array' | 'svg' | 'any';
+
+/**
+ * Taint level for data security tracking.
+ * 0: Clean (e.g., server-sent constants, sanitized data)
+ * 1: Public (e.g., user input that has been validated for structure but not content)
+ * 2: Tainted (e.g., raw, unvalidated user input)
+ */
+export type TaintLevel = 0 | 1 | 2;
 
 /**
  * Input port definition for an operator.
  */
 export interface OperatorInput {
+  /** Name of the input parameter */
   name: string;
+  /** Data type expected for this input */
   type: DataType;
+  /** Optional description for documentation */
   description?: string;
 }
 
 /**
- * Testable algebraic properties of an operator.
- * These drive property-based test generation.
- * 
- * From CONTRIBUTING.md:
- * - Idempotency: Does f(f(x)) == f(x)?
- * - Associativity: Is f(a, f(b, c)) === f(f(a, b), c)?
- * - Commutativity: Is f(a, b) === f(b, a)?
- * - Invertibility: Can the operation be undone via a Lens?
- * - Bounded: Guaranteed to terminate?
+ * Measurable properties for validation and test generation.
  */
 export interface OperatorProperties {
+  /** Big O complexity weight (1=constant, 5=linear, 10=nested) */
+  complexity: 1 | 5 | 10;
+
   /** f(f(x)) === f(x) - Applying twice gives same result as once */
   idempotent?: boolean;
   
@@ -48,6 +54,12 @@ export interface OperatorProperties {
   
   /** Output depends only on inputs (no hidden state) */
   deterministic?: boolean;
+
+  /** The maximum taint level this operator accepts on its inputs. Defaults to 2 (accepts anything). */
+  inputTaint?: TaintLevel;
+  
+  /** The taint level of the data this operator outputs. Defaults to input taint. */
+  outputTaint?: TaintLevel;
 }
 
 /**
@@ -72,7 +84,7 @@ export interface OperatorDefinition {
   op: string;
   
   /** Category for grouping (e.g., 'Image', 'Audio', 'Text') */
-  category: 'Text' | 'Math' | 'Image' | 'Audio' | 'List' | 'Logic' | 'Utility';
+  category: 'Text' | 'Math' | 'Image' | 'Audio' | 'List' | 'Logic' | 'Utility' | 'Sanitizer' | 'CV' | 'Vector' | 'Debug';
   
   // === Type Signature ===
   /** Input port definitions */

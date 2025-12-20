@@ -1,5 +1,5 @@
 import { AppDefinition, OperatorSchema } from './types';
-import { getOperatorRegistry } from './operators';
+import { OPERATOR_REGISTRY as FULL_REGISTRY, getLegacyRegistry } from './operators';
 
 // ============================================================================
 // GOVERNANCE CONSTANTS
@@ -26,6 +26,9 @@ export const MAX_TREE_DEPTH = 50;
 
 /** Maximum nodes in a single pipeline to prevent graph bombs */
 export const MAX_PIPELINE_NODES = 50;
+
+/** Maximum cumulative complexity score for a single pipeline */
+export const MAX_PIPELINE_COMPLEXITY = 50;
 
 /** Maximum bytes a pipeline can process (input + intermediates + output) */
 export const MAX_PIPELINE_BYTES = 50 * 1024 * 1024; // 50MB
@@ -112,4 +115,87 @@ export const INITIAL_APP: AppDefinition = {
 // ============================================================================
 // Re-exported from operators/registry.ts - the single source of truth.
 // See operators/registry.ts for full definitions including tier, properties, and implementations.
-export const OPERATOR_REGISTRY: Record<string, OperatorSchema> = getOperatorRegistry();
+export const OPERATOR_REGISTRY: Record<string, OperatorSchema> = getLegacyRegistry(FULL_REGISTRY);
+
+// ============================================================================
+// VALIDATOR RULES
+// These constants define the security rules enforced by the Gatekeeper.
+// ============================================================================
+
+export const OPCODES = ['SET', 'APPEND', 'RESET', 'TOGGLE', 'SPAWN', 'DELETE', 'ASSIGN', 'RUN'];
+
+export const ALLOWED_OPS = Object.keys(OPERATOR_REGISTRY);
+
+export const SAFE_TAGS = [
+    'div', 'span', 'p', 'article', 'section', 'main', 'aside', 'header', 'footer', 'nav',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
+    'ul', 'ol', 'li', 'dl', 'dt', 'dd',
+    'img', 'figure', 'figcaption',
+    'table', 'thead', 'tbody', 'tr', 'td', 'th',
+    'button', 'input', 'label', 'form', 
+    'hr', 'br', 'pre', 'code', 'blockquote'
+];
+
+export const FORBIDDEN_PROPS = [
+    'dangerouslySetInnerHTML',
+    'innerHTML',
+    'outerHTML',
+    'srcdoc',
+    'formAction',
+    'action',
+];
+
+export const FORBIDDEN_STYLE_PROPS = [
+    'position',
+    'zIndex',
+    'z-index',
+    'opacity',
+    'visibility',
+];
+
+export const EVENT_HANDLER_PATTERN = /^on[A-Z]/;
+
+export const ALLOWED_URL_PATTERNS = [
+    /^\/[^/]/,
+    /^\.?\.\//,
+    /^#/,
+    /^data:image\/(png|jpeg|gif|webp|svg)/i,
+];
+
+// Only block arbitrary values that contain CSS property injection (colon syntax)
+// Safe: [100px], [200], [50%]  
+// Dangerous: [color:red], [background:url(...)], [position:fixed]
+export const TAILWIND_ARBITRARY_PATTERN = /\[[^\]]*:[^\]]*\]/;
+
+export const FORBIDDEN_TAILWIND_CLASSES = [
+    'fixed',
+    'absolute',
+    'sticky',
+    'inset-0',
+    'inset-x-0',
+    'inset-y-0',
+    'z-50', 'z-40', 'z-30', 'z-20', 'z-10',
+    'opacity-0',
+    'invisible',
+    'hidden',
+    'sr-only',
+];
+
+export const ALLOWED_TYPES = [
+    'container', 'text', 'button', 'input', 'header', 'list', 'tabs', 'card', 
+    'element', 'icon', 'chart', 'clock',
+    'file-input', 'slider', 'canvas',
+    'text-input', 'text-display',
+    'modal', 'toast', 'dropdown', 'tooltip', 'popover'
+];
+
+// ============================================================================
+// SECURITY CONSTANTS
+// ============================================================================
+
+/**
+ * Shared secret for signing and verifying AI proposals.
+ * WARNING: In a production system, this MUST be a secure environment variable,
+ * not a hardcoded constant.
+ */
+export const PROPOSAL_SIGNING_SECRET = 'a-very-secret-key-that-should-be-in-env';
