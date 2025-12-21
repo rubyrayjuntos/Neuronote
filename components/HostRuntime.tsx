@@ -396,10 +396,12 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
     const { id, type, props = {}, children } = node;
     
     // Handle bindings from EITHER node level OR props (AI sometimes puts them in props)
+    // Note: AI generates "onEvent" for hierarchical types, but legacy used "onClick"/"onChange"
     const textBinding = node.textBinding || (props as any).textBinding;
     const valueBinding = node.valueBinding || (props as any).valueBinding;
-    const onClick = node.onClick || (props as any).onClick;
-    const onChange = node.onChange || (props as any).onChange;
+    const onEvent = (node as any).onEvent || (props as any).onEvent; // New hierarchical prop
+    const onClick = node.onClick || (props as any).onClick || onEvent; // Fallback to onEvent
+    const onChange = node.onChange || (props as any).onChange || onEvent; // Fallback to onEvent
     
     const actor = resolveActorRead(scopeId);
     if (!actor) return <div className="text-red-500 text-xs p-2">Dead Actor: {scopeId}</div>;
@@ -414,7 +416,7 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
     // Strip NeuroNote-specific props that shouldn't go to DOM
     const { 
       background, color, padding, margin, width, height, style: existingStyle,
-      textBinding: _tb, valueBinding: _vb, onClick: _oc, onChange: _och, // Strip these
+      textBinding: _tb, valueBinding: _vb, onClick: _oc, onChange: _och, onEvent: _oe, // Strip these
       text, label, binding, placeholder, // Also strip these UI-specific props
       ...restProps 
     } = props as Record<string, unknown>;
