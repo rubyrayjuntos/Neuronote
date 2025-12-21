@@ -22,7 +22,8 @@ import React, { ReactNode, useCallback, useMemo } from 'react';
 import { ViewNode, AppContext, AppDefinition } from '../types';
 import { 
   COMPONENT_REGISTRY, 
-  getComponentFactory, 
+  getComponentFactory,
+  getComponentRegistration,
   isValidComponentType,
   AssemblerProps,
   NodeProps,
@@ -150,11 +151,12 @@ function assembleNode(
   const binding = node.binding || (props as Record<string, unknown>).binding as string;
   const onClick = node.onClick || (props as Record<string, unknown>).onClick as string;
   const onChange = node.onChange || (props as Record<string, unknown>).onChange as string;
+  const onEvent = node.onEvent || (props as Record<string, unknown>).onEvent as string;
   
-  // Lookup component in registry
-  const factory = getComponentFactory(type);
+  // Lookup component registration (includes factory + defaultProps)
+  const registration = getComponentRegistration(type);
   
-  if (!factory) {
+  if (!registration) {
     if (options.showUnknownTypes !== false) {
       return <ErrorPlaceholder key={id} type={type} id={id} error="Unknown component type" />;
     }
@@ -162,14 +164,22 @@ function assembleNode(
     return null;
   }
   
+  const factory = registration.factory;
+  
   // Resolve actor data for this scope
   const actor = resolveActorData(ctx);
   if (!actor) {
     return <ErrorPlaceholder key={id} type={type} id={id} error={`Dead actor: ${ctx.scopeId}`} />;
   }
   
+  // Merge defaultProps from registration with node props (node props take precedence)
+  const mergedProps = {
+    ...(registration.defaultProps || {}),
+    ...(props as Record<string, unknown>),
+  };
+  
   // Sanitize props
-  const sanitizedProps = sanitizeProps(props as Record<string, unknown>);
+  const sanitizedProps = sanitizeProps(mergedProps);
   
   // Create dispatch function bound to this scope
   const boundDispatch = (event: string, payload?: unknown) => {
@@ -202,6 +212,7 @@ function assembleNode(
     binding,
     onClick,
     onChange,
+    onEvent,
   };
   
   // Call factory to create component

@@ -150,17 +150,27 @@ STRUCTURE:
   "props": { ... },                  // Visual/config props
   "textBinding": "contextKey",       // Read from context (displays)
   "valueBinding": "contextKey",      // Two-way bind (inputs)
-  "onClick": "EVENT_NAME",           // Dispatch on click
-  "onChange": "EVENT_NAME",          // Dispatch on change
+  "onEvent": "EVENT_NAME",           // Event this component triggers (see manifest)
   "children": [ ... ]                // Nested nodes
 }
+
+CRITICAL: EVENT vs ACTION
+- EVENTS are what components EMIT (FILE_SELECTED, VALUE_CHANGED, CLICK, etc.)
+- ACTIONS are what the state machine DOES (ASSIGN:key, RUN:pipeline, etc.)
+- Components have "onEvent" pointing to an EVENT name from the manifest
+- State machine "actions" array contains ACTION opcodes
+
+EXAMPLE - File Upload Flow:
+View:    { "type": "Input.Image", "id": "imgPicker", "onEvent": "FILE_SELECTED" }
+                                                           ↓
+Machine: { "idle": { "on": { "FILE_SELECTED": { "actions": ["ASSIGN:sourceImage"], "target": "ready" }}}}
 
 COMMON PATTERNS:
 - Display text: { "type": "Display.Text", "textBinding": "message" }
 - Text input:   { "type": "Input.Text", "valueBinding": "inputValue", "placeholder": "..." }
-- Button:       { "type": "Control.Button", "onClick": "SUBMIT", "label": "Submit" }
-- Slider:       { "type": "Input.Slider", "valueBinding": "threshold", "min": 0, "max": 255 }
-- File upload:  { "type": "Input.File", "valueBinding": "uploadedFile", "accept": "image/*" }
+- Button:       { "type": "Control.Button", "onEvent": "CLICK", "label": "Submit" }
+- Slider:       { "type": "Input.Slider", "valueBinding": "threshold", "onEvent": "VALUE_CHANGED", "min": 0, "max": 255 }
+- Image upload: { "type": "Input.Image", "onEvent": "FILE_SELECTED" }
 - Canvas:       { "type": "Display.Canvas", "textBinding": "processedImage" }
 - List:         { "type": "Display.List", "binding": "items" }
 

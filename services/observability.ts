@@ -7,6 +7,11 @@
  * 2. Debugging and development
  * 3. Audit trail for trust assurance
  * 
+ * INTEGRATION WITH TRACING:
+ * - Uses UUID v7 from tracing.ts for chronologically-sortable trace IDs
+ * - Records taint levels at each phase for security auditing
+ * - Provides end-to-end linking from gateway to kernel
+ * 
  * The flow phases are:
  * 1. PROMPT_RECEIVED - User input captured
  * 2. CONTEXT_ASSEMBLED - Current state + feedback gathered
@@ -25,6 +30,8 @@
  * 15. FLOW_COMPLETE - Full cycle done
  * 16. FLOW_ERROR - Error at any phase
  */
+
+import { generateTraceId, TaintLevel } from './tracing';
 
 export type FlowPhase = 
   | 'PROMPT_RECEIVED'
@@ -46,12 +53,13 @@ export type FlowPhase =
 
 export interface FlowEvent {
   id: string;
-  traceId: string;  // Links events in the same flow
+  traceId: string;  // UUID v7 - links events in the same flow
   phase: FlowPhase;
   timestamp: number;
   durationMs?: number;  // Time since previous event
   data: Record<string, unknown>;  // Phase-specific data
   summary: string;  // Human-readable summary
+  taintLevels?: Record<string, TaintLevel>;  // Taint levels of data at this phase
 }
 
 export interface AIFlowTrace {
@@ -110,10 +118,12 @@ class ObservabilityServiceClass {
   private maxTraces = 100; // Keep last N traces
   
   /**
-   * Start a new AI flow trace
+   * Start a new AI flow trace.
+   * Uses UUID v7 for chronologically-sortable trace IDs.
    */
   startTrace(userPrompt: string, provider: string, model: string): string {
-    const traceId = crypto.randomUUID();
+    // Use UUID v7 for chronological ordering and cross-system tracing
+    const traceId = generateTraceId();
     
     this.currentTrace = {
       id: traceId,
@@ -126,7 +136,7 @@ class ObservabilityServiceClass {
     };
     
     this.emitEvent({
-      id: crypto.randomUUID(),
+      id: generateTraceId(),
       traceId,
       phase: 'PROMPT_RECEIVED',
       timestamp: Date.now(),
@@ -154,7 +164,7 @@ class ObservabilityServiceClass {
     const now = Date.now();
     
     const event: FlowEvent = {
-      id: crypto.randomUUID(),
+      id: generateTraceId(),
       traceId: this.currentTrace.id,
       phase,
       timestamp: now,

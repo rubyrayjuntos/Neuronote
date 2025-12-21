@@ -68,6 +68,9 @@ export interface NodeProps {
   /** Event to dispatch on change */
   onChange?: string;
   
+  /** Event name from manifest (e.g., FILE_SELECTED, VALUE_CHANGED) */
+  onEvent?: string;
+  
   /** Label for buttons, inputs */
   label?: string;
   
@@ -120,6 +123,9 @@ export interface ComponentRegistration {
   
   /** Data type this component consumes (for outputs) */
   inputType?: string;
+  
+  /** Default props to merge (for typed aliases like Input.Image) */
+  defaultProps?: Record<string, unknown>;
 }
 
 // ============================================================================
@@ -312,9 +318,10 @@ const TextInputFactory: ComponentFactory = (props) => {
 
 /**
  * Input.Slider - Range slider
+ * Emits: VALUE_CHANGED
  */
 const SliderFactory: ComponentFactory = (props) => {
-  const { className, style, data, valueBinding, onChange, dispatch } = props;
+  const { className, style, data, valueBinding, onChange, onEvent, dispatch } = props;
   const min = (props.min as number) ?? 0;
   const max = (props.max as number) ?? 100;
   const step = (props.step as number) ?? 1;
@@ -323,13 +330,16 @@ const SliderFactory: ComponentFactory = (props) => {
     ? Number(data[valueBinding]) 
     : min;
   
+  // Determine which event to dispatch (onEvent for manifest compatibility)
+  const eventName = (onEvent as string) || (onChange as string);
+  
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = Number(e.target.value);
     if (valueBinding) {
       dispatch(`UPDATE_CONTEXT:${valueBinding}`, val);
     }
-    if (onChange) {
-      dispatch(onChange, val);
+    if (eventName) {
+      dispatch(eventName, val);
     }
   };
   
@@ -349,20 +359,24 @@ const SliderFactory: ComponentFactory = (props) => {
 
 /**
  * Input.Toggle - Boolean toggle switch
+ * Emits: VALUE_CHANGED
  */
 const ToggleFactory: ComponentFactory = (props) => {
-  const { className, style, data, valueBinding, onChange, dispatch, label } = props;
+  const { className, style, data, valueBinding, onChange, onEvent, dispatch, label } = props;
   
   const checked = valueBinding && data[valueBinding] !== undefined 
     ? Boolean(data[valueBinding]) 
     : false;
   
+  // Determine which event to dispatch (onEvent for manifest compatibility)
+  const eventName = (onEvent as string) || (onChange as string);
+  
   const handleChange = () => {
     if (valueBinding) {
       dispatch(`UPDATE_CONTEXT:${valueBinding}`, !checked);
     }
-    if (onChange) {
-      dispatch(onChange, !checked);
+    if (eventName) {
+      dispatch(eventName, !checked);
     }
   };
   
@@ -383,8 +397,11 @@ const ToggleFactory: ComponentFactory = (props) => {
  * Input.File - File upload input
  */
 const FileInputFactory: ComponentFactory = (props) => {
-  const { className, style, valueBinding, onChange, dispatch } = props;
+  const { className, style, valueBinding, onChange, onEvent, dispatch } = props;
   const accept = (props.accept as string) || '*/*';
+  
+  // Determine the event to dispatch (onEvent takes precedence for manifest compatibility)
+  const eventToDispatch = onEvent || onChange;
   
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -395,8 +412,8 @@ const FileInputFactory: ComponentFactory = (props) => {
           if (valueBinding) {
             dispatch(`UPDATE_CONTEXT:${valueBinding}`, ev.target.result);
           }
-          if (onChange) {
-            dispatch(onChange, ev.target.result);
+          if (eventToDispatch) {
+            dispatch(eventToDispatch, ev.target.result);
           }
         }
       };
@@ -410,6 +427,134 @@ const FileInputFactory: ComponentFactory = (props) => {
       accept={accept}
       onChange={handleChange}
       className={`block w-full text-sm text-zinc-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 ${className || ''}`}
+      style={style}
+    />
+  );
+};
+
+/**
+ * Input.TextArea - Multi-line text input
+ */
+const TextAreaFactory: ComponentFactory = (props) => {
+  const { className, style, data, valueBinding, onEvent, dispatch, placeholder } = props;
+  const rows = (props.rows as number) ?? 4;
+  
+  const value = valueBinding && data[valueBinding] !== undefined 
+    ? String(data[valueBinding]) 
+    : '';
+  
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    if (valueBinding) {
+      dispatch(`UPDATE_CONTEXT:${valueBinding}`, e.target.value);
+    }
+    if (onEvent) {
+      dispatch(onEvent, e.target.value);
+    }
+  };
+  
+  return (
+    <textarea 
+      value={value}
+      onChange={handleChange}
+      placeholder={placeholder as string}
+      rows={rows}
+      className={`w-full bg-zinc-900 text-white px-3 py-2 rounded border border-zinc-800 focus:outline-none focus:border-indigo-500 resize-y ${className || ''}`}
+      style={style}
+    />
+  );
+};
+
+/**
+ * Input.Dropzone - Drag-and-drop file area
+ */
+const DropzoneFactory: ComponentFactory = (props) => {
+  const { className, style, valueBinding, onEvent, dispatch } = props;
+  const accept = (props.accept as string) || '*/*';
+  const [isDragging, setIsDragging] = React.useState(false);
+  
+  const eventToDispatch = onEvent || 'FILE_DROPPED';
+  
+  const handleFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      if (typeof ev.target?.result === 'string') {
+        if (valueBinding) {
+          dispatch(`UPDATE_CONTEXT:${valueBinding}`, ev.target.result);
+        }
+        dispatch(eventToDispatch, ev.target.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+  
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  };
+  
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+  
+  const handleDragLeave = () => setIsDragging(false);
+  
+  const handleClick = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) handleFile(file);
+    };
+    input.click();
+  };
+  
+  return (
+    <div
+      onClick={handleClick}
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+        isDragging ? 'border-indigo-500 bg-indigo-500/10' : 'border-zinc-700 hover:border-zinc-600'
+      } ${className || ''}`}
+      style={style}
+    >
+      <div className="text-zinc-500 text-sm">
+        Drop file here or click to upload
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Input.ColorPicker - Color selection input
+ */
+const ColorPickerFactory: ComponentFactory = (props) => {
+  const { className, style, data, valueBinding, onEvent, dispatch } = props;
+  
+  const value = valueBinding && data[valueBinding] !== undefined 
+    ? String(data[valueBinding]) 
+    : '#000000';
+  
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (valueBinding) {
+      dispatch(`UPDATE_CONTEXT:${valueBinding}`, e.target.value);
+    }
+    if (onEvent) {
+      dispatch(onEvent, e.target.value);
+    }
+  };
+  
+  return (
+    <input 
+      type="color"
+      value={value}
+      onChange={handleChange}
+      className={`w-10 h-10 rounded cursor-pointer border border-zinc-700 ${className || ''}`}
       style={style}
     />
   );
@@ -705,51 +850,142 @@ export const COMPONENT_REGISTRY: Record<string, ComponentRegistration> = {
   'button': { factory: ButtonFactory, description: 'Alias for Control.Button', props: [], events: ['onClick'] },
   
   // === INPUT COMPONENTS ===
-  'Input.Text': {
+  // Text input field (matches manifest Input.TextField)
+  'Input.TextField': {
     factory: TextInputFactory,
-    description: 'Text input field',
+    description: 'Single-line text input. Emits VALUE_CHANGED.',
     props: [
       { name: 'valueBinding', type: 'string', description: 'Context key for two-way binding' },
       { name: 'placeholder', type: 'string', description: 'Placeholder text' },
-      { name: 'onChange', type: 'string', description: 'Event to dispatch on change' },
+      { name: 'onEvent', type: 'string', description: 'Event to dispatch (VALUE_CHANGED)' },
     ],
-    events: ['onChange'],
+    events: ['VALUE_CHANGED'],
     outputType: 'string',
+  },
+  // Text file upload (matches manifest Input.Text)
+  'Input.Text': {
+    factory: FileInputFactory,
+    description: 'File picker for text files (TXT, MD). Emits FILE_SELECTED.',
+    props: [
+      { name: 'valueBinding', type: 'string', description: 'Context key to store text content' },
+      { name: 'onEvent', type: 'string', description: 'Event to dispatch (FILE_SELECTED)' },
+    ],
+    events: ['FILE_SELECTED'],
+    outputType: 'string',
+    defaultProps: { accept: '.txt,.md,text/plain,text/markdown' },
   },
   'Input.Slider': {
     factory: SliderFactory,
-    description: 'Numeric range slider',
+    description: 'Numeric range slider. Emits VALUE_CHANGED.',
     props: [
       { name: 'valueBinding', type: 'string', description: 'Context key for two-way binding' },
       { name: 'min', type: 'number', description: 'Minimum value', default: 0 },
       { name: 'max', type: 'number', description: 'Maximum value', default: 100 },
       { name: 'step', type: 'number', description: 'Step increment', default: 1 },
-      { name: 'onChange', type: 'string', description: 'Event to dispatch on change' },
+      { name: 'onEvent', type: 'string', description: 'Event to dispatch (VALUE_CHANGED)' },
     ],
-    events: ['onChange'],
+    events: ['VALUE_CHANGED'],
     outputType: 'number',
   },
   'Input.Toggle': {
     factory: ToggleFactory,
-    description: 'Boolean toggle switch',
+    description: 'Boolean toggle switch. Emits VALUE_CHANGED.',
     props: [
       { name: 'valueBinding', type: 'string', description: 'Context key for two-way binding' },
       { name: 'label', type: 'string', description: 'Label text' },
-      { name: 'onChange', type: 'string', description: 'Event to dispatch on change' },
+      { name: 'onEvent', type: 'string', description: 'Event to dispatch (VALUE_CHANGED)' },
     ],
-    events: ['onChange'],
+    events: ['VALUE_CHANGED'],
     outputType: 'boolean',
   },
   'Input.File': {
     factory: FileInputFactory,
-    description: 'File upload input',
+    description: 'Generic file upload input. Emits FILE_SELECTED.',
     props: [
       { name: 'valueBinding', type: 'string', description: 'Context key to store file data' },
       { name: 'accept', type: 'string', description: 'Accepted file types', default: '*/*' },
-      { name: 'onChange', type: 'string', description: 'Event to dispatch on file select' },
+      { name: 'onEvent', type: 'string', description: 'Event to dispatch (FILE_SELECTED)' },
     ],
-    events: ['onChange'],
+    events: ['onChange', 'onEvent'],
     outputType: 'string', // DataURL
+  },
+  // Typed file input aliases (match manifest Input.* primitives)
+  'Input.Image': {
+    factory: FileInputFactory,
+    description: 'Image file upload (PNG, JPG, WebP). Emits FILE_SELECTED.',
+    props: [
+      { name: 'valueBinding', type: 'string', description: 'Context key to store image DataURL' },
+      { name: 'onEvent', type: 'string', description: 'Event to dispatch (FILE_SELECTED)' },
+    ],
+    events: ['FILE_SELECTED'],
+    outputType: 'image',
+    defaultProps: { accept: 'image/*' },
+  },
+  'Input.Audio': {
+    factory: FileInputFactory,
+    description: 'Audio file upload (MP3, WAV, OGG). Emits FILE_SELECTED.',
+    props: [
+      { name: 'valueBinding', type: 'string', description: 'Context key to store audio DataURL' },
+      { name: 'onEvent', type: 'string', description: 'Event to dispatch (FILE_SELECTED)' },
+    ],
+    events: ['FILE_SELECTED'],
+    outputType: 'audio',
+    defaultProps: { accept: 'audio/*' },
+  },
+  'Input.CSV': {
+    factory: FileInputFactory,
+    description: 'CSV file upload. Emits FILE_SELECTED.',
+    props: [
+      { name: 'valueBinding', type: 'string', description: 'Context key to store CSV data' },
+      { name: 'onEvent', type: 'string', description: 'Event to dispatch (FILE_SELECTED)' },
+    ],
+    events: ['FILE_SELECTED'],
+    outputType: 'string',
+    defaultProps: { accept: '.csv,text/csv' },
+  },
+  'Input.JSON': {
+    factory: FileInputFactory,
+    description: 'JSON file upload. Emits FILE_SELECTED.',
+    props: [
+      { name: 'valueBinding', type: 'string', description: 'Context key to store JSON data' },
+      { name: 'onEvent', type: 'string', description: 'Event to dispatch (FILE_SELECTED)' },
+    ],
+    events: ['FILE_SELECTED'],
+    outputType: 'json',
+    defaultProps: { accept: '.json,application/json' },
+  },
+  'Input.TextArea': {
+    factory: TextAreaFactory,
+    description: 'Multi-line text input. Emits VALUE_CHANGED.',
+    props: [
+      { name: 'valueBinding', type: 'string', description: 'Context key for two-way binding' },
+      { name: 'placeholder', type: 'string', description: 'Placeholder text' },
+      { name: 'rows', type: 'number', description: 'Number of visible rows', default: 4 },
+      { name: 'onEvent', type: 'string', description: 'Event to dispatch (VALUE_CHANGED)' },
+    ],
+    events: ['VALUE_CHANGED'],
+    outputType: 'string',
+  },
+  'Input.Dropzone': {
+    factory: DropzoneFactory,
+    description: 'Drag-and-drop file upload area. Emits FILE_DROPPED.',
+    props: [
+      { name: 'valueBinding', type: 'string', description: 'Context key to store file DataURL' },
+      { name: 'accept', type: 'string', description: 'Accepted file types' },
+      { name: 'onEvent', type: 'string', description: 'Event to dispatch (FILE_DROPPED)' },
+    ],
+    events: ['FILE_DROPPED'],
+    outputType: 'string',
+  },
+  'Input.ColorPicker': {
+    factory: ColorPickerFactory,
+    description: 'Color selection input. Emits VALUE_CHANGED.',
+    props: [
+      { name: 'valueBinding', type: 'string', description: 'Context key for two-way binding' },
+      { name: 'onEvent', type: 'string', description: 'Event to dispatch (VALUE_CHANGED)' },
+    ],
+    events: ['VALUE_CHANGED'],
+    outputType: 'string',
   },
   // Legacy aliases
   'input': { factory: TextInputFactory, description: 'Alias for Input.Text', props: [], events: ['onChange'], outputType: 'string' },
@@ -790,6 +1026,13 @@ export const COMPONENT_REGISTRY: Record<string, ComponentRegistration> = {
  */
 export function getComponentFactory(type: string): ComponentFactory | null {
   return COMPONENT_REGISTRY[type]?.factory || null;
+}
+
+/**
+ * Get full component registration by type ID (includes defaultProps).
+ */
+export function getComponentRegistration(type: string): ComponentRegistration | null {
+  return COMPONENT_REGISTRY[type] || null;
 }
 
 /**

@@ -359,10 +359,12 @@ export function generateManifestForPrompt(): string {
     '## LAYER 1: EMBODIED I/O (Interface Primitives)',
     '',
     '### Input Streams',
+    'Each input emits a specific event when triggered. Use that event name in the state machine.',
+    '',
   ];
   
   for (const input of INPUT_PRIMITIVES) {
-    lines.push(`- ${input.id}: ${input.description} → outputs ${input.outputType}`);
+    lines.push(`- ${input.id}: ${input.description} → outputs ${input.outputType}, emits "${input.emitsEvent}"`);
   }
   
   lines.push('', '### Output Sinks');
