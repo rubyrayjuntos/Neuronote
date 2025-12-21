@@ -926,4 +926,55 @@ Entropy Source: Always use window.crypto.getRandomValues (CSPRNG) rather than Ma
 Every rotation is logged by the Security Audit Log with a timestamp and a "Key Version ID". This allows the Validation Kernel to retroactively verify which secret was used for any historical blueprint in the log. 
 This architecture now provides a mathematically verifiable, side-effect-free, and cryptographically secure pipeline for your React/Framer-Motion components.
 
+rays@raybuntu:~/Documents/Neuronote$ npx vitest run --reporter=verbose 2>&1 | head -50
 
+ RUN  v4.0.15 /home/rays/Documents/Neuronote
+
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > Text.ToUpper handles any input without throwing 122ms
+ ✓ utils/architecture.test.ts > Manifest Derivation (Single Source of Truth) > should derive all operators from OPERATOR_REGISTRY 3ms
+ ✓ utils/architecture.test.ts > Manifest Derivation (Single Source of Truth) > should have 46 operators in the registry 0ms
+ ✓ utils/architecture.test.ts > Manifest Derivation (Single Source of Truth) > should preserve operator metadata in manifest 0ms
+ ✓ utils/architecture.test.ts > Manifest Derivation (Single Source of Truth) > should mark Tier 2 operators as heavy 0ms
+ ✓ utils/architecture.test.ts > Manifest Derivation (Single Source of Truth) > should include all categories in manifest 0ms
+ ✓ utils/architecture.test.ts > Prompt Builder > should generate non-empty capability prompt 2ms
+ ✓ utils/architecture.test.ts > Prompt Builder > should include Layer 1 I/O section 1ms
+ ✓ utils/architecture.test.ts > Prompt Builder > should include Layer 2 operators section 1ms
+ ✓ utils/architecture.test.ts > Prompt Builder > should include Layer 3 control section 1ms
+ ✓ utils/architecture.test.ts > Prompt Builder > should include all 46 operators in prompt 2ms
+ ✓ utils/architecture.test.ts > Prompt Builder > should include testVectors section 1ms
+ ✓ utils/architecture.test.ts > Prompt Builder > should build user prompt with current definition 0ms
+ ✓ utils/architecture.test.ts > Prompt Builder > should include validation feedback when provided 0ms
+ ✓ utils/architecture.test.ts > Manifest Prompt Generation > should generate compact manifest for AI 0ms
+ ✓ utils/architecture.test.ts > Manifest Prompt Generation > should include input/output primitives 0ms
+ ✓ utils/architecture.test.ts > Manifest Prompt Generation > should include state machine capabilities 1ms
+ ✓ utils/architecture.test.ts > Valid Operator ID Registry > should return all valid IDs 0ms
+ ✓ utils/architecture.test.ts > Valid Operator ID Registry > should have at least 60 valid IDs 0ms
+ ✓ utils/architecture.test.ts > Component Registry > should have factories for core UI types 0ms
+ ✓ utils/architecture.test.ts > Component Registry > should have factories for new component types 0ms
+ ✓ utils/architecture.test.ts > Component Registry > should return null for unknown types 0ms
+ ✓ utils/architecture.test.ts > Component Registry > should have documentation generator 0ms
+ ✓ utils/architecture.test.ts > Registry Synchronization > should have matching operator counts in manifest and registry 0ms
+ ✓ utils/architecture.test.ts > Registry Synchronization > should have all operator IDs match between registries 1ms
+ ✓ utils/architecture.test.ts > Registry Synchronization > should preserve complexity levels 5ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > Text.Length handles any input without throwing 88ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > Text.RegexMatch handles any input without throwing 135ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > Text.Join handles any input without throwing 106ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > Math.Add handles any input without throwing 94ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > Math.Subtract handles any input without throwing 87ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > Math.Multiply handles any input without throwing 90ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > Math.Divide handles any input without throwing 82ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > Math.Threshold handles any input without throwing 91ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > Logic.If handles any input without throwing 101ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > Utility.JsonPath handles any input without throwing 97ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > List.Map handles any input without throwing 63ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > List.Filter handles any input without throwing 66ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > List.Sort handles any input without throwing 71ms
+ ✓ utils/operators.test.ts > Operator Robustness (No Throws) > List.Take handles any input without throwing 86ms
+ ✓ utils/operators.test.ts > Operator Purity (Deterministic) > Text.ToUpper is pure 10ms
+ ✓ utils/operators.test.ts > Operator Purity (Deterministic) > Math.Add is pure 10ms
+ ✓ utils/operators.test.ts > Operator Purity (Deterministic) > List.Sort is pure and does not mutate input 31ms
+ ✓ utils/operators.test.ts > Operator Type Preservation > Text.ToUpper returns string 20ms
+ ✓ utils/operators.test.ts > Operator Type Preservation > Text.Length returns number 32ms
+ ✓ utils/operators.test.ts > Operator Type Preservation > Math.Add returns number 28ms
+ ✓ utils/operators.test.ts > Operator Type Preservation > Math.Threshold returns 0 or 1 28ms
+ 

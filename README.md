@@ -101,7 +101,7 @@ The system enforces a strict **Host–Guest architecture**:
 │  └─────────────────────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────────────────┐   │
 │  │  Tier 2: Web Worker Isolation                                │   │
-│  │  • 23+ verified operators (Text, Math, Image, Audio, List)   │   │
+│  │  • 46 verified operators (Text, Math, Image, Audio, CV)     │   │
 │  │  • Dataflow pipeline execution                               │   │
 │  │  • Bounded iteration (FoldN with 1000 cap)                   │   │
 │  └─────────────────────────────────────────────────────────────┘   │
@@ -148,19 +148,26 @@ traces (e.g., prompt injection, scope creep, intent drift).
 
 ## Operator Library
 
-NeuroNote provides 23+ verified primitive operators that AI can compose:
+NeuroNote provides **46 verified primitive operators** that AI can compose:
 
-| Category | Operators |
-|----------|-----------|
-| **Text** | `ToUpper`, `ToLower`, `Concat`, `Split`, `Trim`, `Length`, `RegexMatch`, `Join`, `Substring`, `Replace`, `Template` |
-| **Math** | `Add`, `Subtract`, `Multiply`, `Divide`, `Threshold`, `Abs`, `Round`, `Clamp` |
-| **List** | `Sort`, `Filter`, `Take`, `Map`, `FoldN`, `Reduce` |
-| **Logic** | `If`, `Not`, `And`, `Or` |
-| **Image** | `Grayscale`, `Invert`, `EdgeDetect` |
-| **Audio** | `FFT`, `PeakDetect` |
-| **Utility** | `JsonPath`, `Identity` |
+| Category | Count | Operators |
+|----------|-------|-----------|
+| **Text** | 8 | `ToUpper`, `ToLower`, `Length`, `RegexMatch`, `Join`, `Split`, `Replace`, `Template` |
+| **Sanitizer** | 3 | `StripHTML`, `Clamp`, `Truncate` |
+| **Math** | 7 | `Add`, `Subtract`, `Multiply`, `Divide`, `Threshold`, `Clamp`, `Normalize` |
+| **Logic** | 1 | `If` |
+| **Utility** | 1 | `JsonPath` |
+| **List** | 9 | `Map`, `Filter`, `Sort`, `Take`, `Reduce`, `FoldN`, `Append`, `GroupBy`, `Length` |
+| **Image** | 7 | `Decode`, `Grayscale`, `Invert`, `EdgeDetect`, `Resize`, `Threshold`, `Blur` |
+| **CV** | 2 | `ContourTrace`, `Vectorize` |
+| **Vector** | 2 | `ToSVG`, `Simplify` |
+| **Audio** | 4 | `Decode`, `FFT`, `PeakDetect`, `BeatDetect` |
+| **Debug** | 2 | `TraceInsert`, `DiffState` |
 
-These 23 primitives are sufficient to compose tools ranging from Image Vectorizers to Audio Analyzers without new code execution.
+**Tier 1 (33 operators)**: Sync, pure, run in QuickJS WASM sandbox  
+**Tier 2 (13 operators)**: Async, use browser APIs (OffscreenCanvas, AudioContext)
+
+These primitives are sufficient to compose tools ranging from Image Vectorizers to Audio Analyzers without new code execution.
 
 All operators are:
 - ✅ Property-based tested with fast-check (66 tests)
@@ -256,6 +263,7 @@ neuronote/
 | [Dual-Kernel Architecture Paper](docs/NeuroNote_%20A%20Dual-Kernel%20Architecture%20for%20Safe%20Malleable%20Software_.md) | Academic paper describing the theoretical foundations |
 | [Definition of Done](docs/NeuroNote%20-%20Definition%20of%20Done_%20Dataflow%20Primitive%20System%20(NeuroNote%20Tool%20Set%20Architecture).md) | Implementation specification for the operator system |
 | [Primitive Tool Set](docs/NeuroNote%20-%20primitive%20tool%20set.md) | Detailed operator documentation |
+| [Operator Architecture](docs/OPERATOR_ARCHITECTURE.md) | Technical spec for operator internals (files, tiers, adding new operators) |
 | [🔨 How to Break NeuroNote](docs/HOW_TO_BREAK_NEURONOTE.md) | Red team testing guide with attack vectors and defenses |
 
 ---
@@ -374,11 +382,40 @@ Reading Order:
 
 ## Roadmap
 
+### Active Development
 - [ ] **Prompt Firewall**: Rule-based pre-filter for known attack patterns
 - [ ] **Formal Verification**: Coq/Lean proofs for critical operators
 - [ ] **Multi-model Consensus**: Cross-reference proposals from multiple AIs
 - [ ] **Capability Signing**: Cryptographic proof of operator permissions
 - [ ] **Distributed Validation**: Peer-to-peer verification network
+
+### Technical Debt & Architecture Improvements
+
+#### High Priority
+- [ ] **WASM-based Tier 2 Operators**: Replace Worker blob pattern with proper WASM modules
+  - Currently Tier 2 operators (Image, Audio, CV) are defined in a string blob
+  - Can't import modules, requires manual sync between registry and Worker
+  - See `docs/OPERATOR_ARCHITECTURE.md` for details
+- [ ] **Operator Validation Script**: CI check that registry matches Worker implementations
+- [ ] **Auto-generate manifest.json**: Currently requires manual click in Gatekeeper UI
+
+#### Medium Priority
+- [ ] **Single-file Operator Definitions**: YAML/JSON schema that generates registry + impl + tests
+- [ ] **Hot-reloadable Operators**: Add operators without full rebuild
+- [ ] **Streaming Pipeline Execution**: Progress callbacks for long-running Tier 2 ops
+- [ ] **Pipeline Caching**: Memoize deterministic pipeline results
+
+#### Low Priority / Research
+- [ ] **User-defined Operators**: Safe DSL for custom operators (with sandboxing)
+- [ ] **Operator Composition**: Combine primitives into reusable macros
+- [ ] **GPU Acceleration**: WebGPU for Image/CV operators
+- [ ] **Differential Dataflow**: Incremental pipeline re-execution
+
+### Known Issues
+- [ ] CV operators (ContourTrace, Vectorize) produce basic output - needs refinement
+- [ ] Audio.BeatDetect uses simple onset detection - not production-quality
+- [ ] Image.Blur is box blur only - no Gaussian option yet
+- [ ] No operator timeout enforcement in Worker (relies on fuel metering only)
 
 ---
 
