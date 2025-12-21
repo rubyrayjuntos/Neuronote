@@ -228,7 +228,7 @@ let globalDef = null;
 // This runs in the Worker.
 
 // Helper: Async Image Processor using OffscreenCanvas
-async function processImage(dataUrl, effect) {
+async function processImage(dataUrl, effect, params = {}) {
     if (!dataUrl || !dataUrl.startsWith('data:image')) return dataUrl;
     
     try {
@@ -243,36 +243,104 @@ async function processImage(dataUrl, effect) {
         const imageData = ctx.getImageData(0, 0, width, height);
         const data = imageData.data;
 
-        if (effect === 'grayscale') {
-            for (let i = 0; i < data.length; i += 4) {
-                const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-                data[i] = avg;
-                data[i + 1] = avg;
-                data[i + 2] = avg;
+        // Image effects - data-driven where possible
+        const effects = {
+            grayscale: () => {
+                for (let i = 0; i < data.length; i += 4) {
+                    const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                    data[i] = avg;
+                    data[i + 1] = avg;
+                    data[i + 2] = avg;
+                }
+            },
+            invert: () => {
+                for (let i = 0; i < data.length; i += 4) {
+                    data[i] = 255 - data[i];
+                    data[i + 1] = 255 - data[i + 1];
+                    data[i + 2] = 255 - data[i + 2];
+                }
+            },
+            threshold: () => {
+                const thresh = params.threshold ?? 128;
+                for (let i = 0; i < data.length; i += 4) {
+                    const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                    const v = avg > thresh ? 255 : 0;
+                    data[i] = v;
+                    data[i + 1] = v;
+                    data[i + 2] = v;
+                }
+            },
+            edge: () => {
+                // Sobel edge detection
+                const grayscale = new Uint8Array(width * height);
+                for (let i = 0; i < data.length; i += 4) {
+                    grayscale[i / 4] = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                }
+                const sobelX = [-1, 0, 1, -2, 0, 2, -1, 0, 1];
+                const sobelY = [-1, -2, -1, 0, 0, 0, 1, 2, 1];
+                for (let y = 1; y < height - 1; y++) {
+                    for (let x = 1; x < width - 1; x++) {
+                        let gx = 0, gy = 0;
+                        for (let ky = -1; ky <= 1; ky++) {
+                            for (let kx = -1; kx <= 1; kx++) {
+                                const idx = (y + ky) * width + (x + kx);
+                                const ki = (ky + 1) * 3 + (kx + 1);
+                                gx += grayscale[idx] * sobelX[ki];
+                                gy += grayscale[idx] * sobelY[ki];
+                            }
+                        }
+                        const mag = Math.min(255, Math.sqrt(gx * gx + gy * gy));
+                        const i = (y * width + x) * 4;
+                        data[i] = data[i + 1] = data[i + 2] = mag;
+                    }
+                }
+            },
+            blur: () => {
+                // Box blur (3x3 kernel)
+                const radius = params.radius ?? 1;
+                const copy = new Uint8ClampedArray(data);
+                for (let y = radius; y < height - radius; y++) {
+                    for (let x = radius; x < width - radius; x++) {
+                        let r = 0, g = 0, b = 0, count = 0;
+                        for (let ky = -radius; ky <= radius; ky++) {
+                            for (let kx = -radius; kx <= radius; kx++) {
+                                const idx = ((y + ky) * width + (x + kx)) * 4;
+                                r += copy[idx];
+                                g += copy[idx + 1];
+                                b += copy[idx + 2];
+                                count++;
+                            }
+                        }
+                        const i = (y * width + x) * 4;
+                        data[i] = r / count;
+                        data[i + 1] = g / count;
+                        data[i + 2] = b / count;
+                    }
+                }
+            },
+            resize: () => {
+                // Resize is handled separately since it changes canvas size
+                // This is a placeholder - actual resize happens below
             }
-        } else if (effect === 'invert') {
-             for (let i = 0; i < data.length; i += 4) {
-                data[i] = 255 - data[i];
-                data[i + 1] = 255 - data[i + 1];
-                data[i + 2] = 255 - data[i + 2];
-            }
-        } else if (effect === 'threshold') {
-             for (let i = 0; i < data.length; i += 4) {
-                const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-                const v = avg > 128 ? 255 : 0;
-                data[i] = v;
-                data[i + 1] = v;
-                data[i + 2] = v;
-             }
-        } else if (effect === 'edge') {
-            // Simple Edge Detection (High Pass)
-            for (let i = 0; i < data.length; i += 4) {
-               const r = Math.abs(data[i] - (data[i+4] || data[i]));
-               const val = r > 20 ? 255 : 0;
-               data[i] = val;
-               data[i+1] = val;
-               data[i+2] = val;
-            }
+        };
+
+        if (effect === 'resize') {
+            const targetWidth = params.width ?? Math.min(width, 512);
+            const targetHeight = params.height ?? Math.min(height, 512);
+            const resizeCanvas = new OffscreenCanvas(targetWidth, targetHeight);
+            const resizeCtx = resizeCanvas.getContext('2d');
+            resizeCtx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+            const blobOut = await resizeCanvas.convertToBlob();
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(blobOut);
+            });
+        }
+
+        // Apply the effect
+        if (effects[effect]) {
+            effects[effect]();
         }
 
         ctx.putImageData(imageData, 0, 0);
@@ -285,6 +353,216 @@ async function processImage(dataUrl, effect) {
     } catch (e) {
         console.warn("Image Processing Failed", e);
         return dataUrl; 
+    }
+}
+
+// Helper: Decode image to raw pixel data (for CV operations)
+async function decodeImage(dataUrl) {
+    if (!dataUrl || !dataUrl.startsWith('data:image')) return null;
+    try {
+        const blob = await (await fetch(dataUrl)).blob();
+        const bitmap = await createImageBitmap(blob);
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(bitmap, 0, 0);
+        const imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+        return {
+            width: bitmap.width,
+            height: bitmap.height,
+            data: Array.from(imageData.data), // Convert to regular array for JSON
+            channels: 4
+        };
+    } catch (e) {
+        console.warn("Image Decode Failed", e);
+        return null;
+    }
+}
+
+// Helper: Contour tracing using marching squares algorithm
+function traceContours(imageData, threshold = 128) {
+    const { width, height, data } = imageData;
+    
+    // Convert to binary image (1 = foreground, 0 = background)
+    const binary = new Uint8Array(width * height);
+    for (let i = 0; i < data.length; i += 4) {
+        const gray = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        binary[i / 4] = gray > threshold ? 1 : 0;
+    }
+    
+    const contours = [];
+    const visited = new Set();
+    
+    // Marching squares lookup table (simplified)
+    const marchingSquares = (x, y) => {
+        const idx = (cy, cx) => {
+            if (cx < 0 || cx >= width || cy < 0 || cy >= height) return 0;
+            return binary[cy * width + cx];
+        };
+        
+        // Get 2x2 cell values
+        const tl = idx(y, x);
+        const tr = idx(y, x + 1);
+        const bl = idx(y + 1, x);
+        const br = idx(y + 1, x + 1);
+        
+        return (tl << 3) | (tr << 2) | (br << 1) | bl;
+    };
+    
+    // Find contour starting points and trace
+    for (let y = 0; y < height - 1; y++) {
+        for (let x = 0; x < width - 1; x++) {
+            const cell = marchingSquares(x, y);
+            // Edge cells (not all same)
+            if (cell > 0 && cell < 15) {
+                const key = y * width + x;
+                if (!visited.has(key)) {
+                    visited.add(key);
+                    // Start a new contour
+                    const contour = [];
+                    let cx = x, cy = y;
+                    let steps = 0;
+                    const maxSteps = width * height; // Prevent infinite loops
+                    
+                    while (steps < maxSteps) {
+                        const c = marchingSquares(cx, cy);
+                        if (c === 0 || c === 15) break;
+                        
+                        contour.push({ x: cx + 0.5, y: cy + 0.5 });
+                        visited.add(cy * width + cx);
+                        
+                        // Simple direction based on cell type
+                        if (c === 1 || c === 5 || c === 13) cy++;
+                        else if (c === 2 || c === 6 || c === 14) cx++;
+                        else if (c === 4 || c === 10 || c === 11) cy--;
+                        else if (c === 8 || c === 9 || c === 12) cx--;
+                        else if (c === 3 || c === 7) cx++;
+                        else cx++;
+                        
+                        if (cx < 0 || cx >= width - 1 || cy < 0 || cy >= height - 1) break;
+                        steps++;
+                    }
+                    
+                    if (contour.length > 10) { // Only keep significant contours
+                        contours.push(contour);
+                    }
+                }
+            }
+        }
+    }
+    
+    return contours;
+}
+
+// Helper: Convert contours to SVG paths
+function contoursToSVG(contours, width, height) {
+    const paths = contours.map(contour => {
+        if (contour.length === 0) return '';
+        const first = contour[0];
+        let d = 'M ' + first.x.toFixed(1) + ' ' + first.y.toFixed(1);
+        for (let i = 1; i < contour.length; i++) {
+            d += ' L ' + contour[i].x.toFixed(1) + ' ' + contour[i].y.toFixed(1);
+        }
+        d += ' Z'; // Close path
+        return '<path d="' + d + '" fill="none" stroke="black" stroke-width="1"/>';
+    }).filter(p => p);
+    
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height + '">' + paths.join('') + '</svg>';
+}
+
+// Helper: Full vectorization pipeline
+async function vectorizeImage(dataUrl) {
+    const decoded = await decodeImage(dataUrl);
+    if (!decoded) return '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+    
+    // Apply edge detection first for better contours
+    const edgeData = { ...decoded, data: [...decoded.data] };
+    const grayscale = new Uint8Array(decoded.width * decoded.height);
+    for (let i = 0; i < decoded.data.length; i += 4) {
+        grayscale[i / 4] = (decoded.data[i] + decoded.data[i + 1] + decoded.data[i + 2]) / 3;
+    }
+    
+    // Sobel edge detection
+    const edges = new Uint8Array(decoded.width * decoded.height);
+    const w = decoded.width;
+    const h = decoded.height;
+    for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+            const gx = -grayscale[(y-1)*w+(x-1)] + grayscale[(y-1)*w+(x+1)]
+                     - 2*grayscale[y*w+(x-1)] + 2*grayscale[y*w+(x+1)]
+                     - grayscale[(y+1)*w+(x-1)] + grayscale[(y+1)*w+(x+1)];
+            const gy = -grayscale[(y-1)*w+(x-1)] - 2*grayscale[(y-1)*w+x] - grayscale[(y-1)*w+(x+1)]
+                     + grayscale[(y+1)*w+(x-1)] + 2*grayscale[(y+1)*w+x] + grayscale[(y+1)*w+(x+1)];
+            edges[y * w + x] = Math.min(255, Math.sqrt(gx * gx + gy * gy));
+        }
+    }
+    
+    // Convert edges back to RGBA for contour tracing
+    for (let i = 0; i < edges.length; i++) {
+        edgeData.data[i * 4] = edges[i];
+        edgeData.data[i * 4 + 1] = edges[i];
+        edgeData.data[i * 4 + 2] = edges[i];
+    }
+    
+    const contours = traceContours(edgeData, 50);
+    return contoursToSVG(contours, decoded.width, decoded.height);
+}
+
+// Helper: Decode audio to PCM buffer
+async function decodeAudio(dataUrl) {
+    if (!dataUrl || !dataUrl.startsWith('data:audio')) return null;
+    try {
+        const resp = await fetch(dataUrl);
+        const arrayBuffer = await resp.arrayBuffer();
+        const ctx = new OfflineAudioContext(1, 1, 44100);
+        const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+        return {
+            sampleRate: audioBuffer.sampleRate,
+            duration: audioBuffer.duration,
+            numberOfChannels: audioBuffer.numberOfChannels,
+            samples: Array.from(audioBuffer.getChannelData(0)) // First channel
+        };
+    } catch (e) {
+        console.warn("Audio Decode Failed", e);
+        return null;
+    }
+}
+
+// Helper: Beat detection using onset detection
+async function detectBeats(dataUrl) {
+    if (!dataUrl || !dataUrl.startsWith('data:audio')) return [];
+    try {
+        const resp = await fetch(dataUrl);
+        const arrayBuffer = await resp.arrayBuffer();
+        const ctx = new OfflineAudioContext(1, 1, 44100);
+        const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+        const samples = audioBuffer.getChannelData(0);
+        
+        // Simple onset detection using energy differences
+        const frameSize = 1024;
+        const hopSize = 512;
+        const beats = [];
+        let prevEnergy = 0;
+        const threshold = 1.5; // Energy ratio threshold for beat
+        
+        for (let i = 0; i < samples.length - frameSize; i += hopSize) {
+            let energy = 0;
+            for (let j = 0; j < frameSize; j++) {
+                energy += samples[i + j] * samples[i + j];
+            }
+            energy = Math.sqrt(energy / frameSize);
+            
+            // Detect onset (sudden increase in energy)
+            if (prevEnergy > 0 && energy / prevEnergy > threshold) {
+                const timeMs = (i / audioBuffer.sampleRate) * 1000;
+                beats.push(timeMs);
+            }
+            prevEnergy = energy;
+        }
+        
+        return beats;
+    } catch (e) {
+        console.warn("Beat Detection Failed", e);
+        return [];
     }
 }
 
@@ -345,15 +623,27 @@ function performRealFFT(waveform, bins) {
  */
 const TIER2_OPERATORS = {
     // IMAGE OPS (Async - use OffscreenCanvas)
+    'Image.Decode': async (inputs) => decodeImage(inputs[0]),
     'Image.Grayscale': async (inputs) => processImage(inputs[0], 'grayscale'),
     'Image.Invert': async (inputs) => processImage(inputs[0], 'invert'),
     'Image.EdgeDetect': async (inputs) => processImage(inputs[0], 'edge'),
-    'Image.Resize': async (inputs) => processImage(inputs[0], 'resize'),
-    'Image.Threshold': async (inputs) => processImage(inputs[0], 'threshold'),
+    'Image.Resize': async (inputs) => processImage(inputs[0], 'resize', { width: inputs[1], height: inputs[2] }),
+    'Image.Threshold': async (inputs) => processImage(inputs[0], 'threshold', { threshold: inputs[1] }),
+    'Image.Blur': async (inputs) => processImage(inputs[0], 'blur', { radius: inputs[1] }),
+
+    // COMPUTER VISION OPS (Async - complex algorithms)
+    'CV.ContourTrace': async (inputs) => {
+        const decoded = await decodeImage(inputs[0]);
+        if (!decoded) return [];
+        return traceContours(decoded, inputs[1] ?? 128);
+    },
+    'CV.Vectorize': async (inputs) => vectorizeImage(inputs[0]),
 
     // AUDIO OPS (Async - use AudioContext)
+    'Audio.Decode': async (inputs) => decodeAudio(inputs[0]),
     'Audio.FFT': async (inputs) => processAudio(inputs[0], 'fft'),
-    'Audio.PeakDetect': async (inputs) => processAudio(inputs[0], 'peak')
+    'Audio.PeakDetect': async (inputs) => processAudio(inputs[0], 'peak'),
+    'Audio.BeatDetect': async (inputs) => detectBeats(inputs[0])
 };
 
 // Tier 1 operators are injected here at boot time from operators/registry.ts

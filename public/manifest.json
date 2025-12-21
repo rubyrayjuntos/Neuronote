@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "timestamp": "2025-12-18T23:45:57.784Z",
+  "timestamp": "2025-12-21T09:58:56.265Z",
   "primitives": {
     "text": [
       {
@@ -23,6 +23,28 @@
           "bounded": true,
           "deterministic": true,
           "inputTaint": 0,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "Text.ToLower",
+        "category": "Text",
+        "inputs": [
+          {
+            "name": "text",
+            "type": "string"
+          }
+        ],
+        "output": "string",
+        "description": "Converts text to lowercase.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
           "outputTaint": 0
         }
       },
@@ -98,6 +120,88 @@
           "deterministic": true,
           "outputTaint": 2
         }
+      },
+      {
+        "op": "Text.Split",
+        "category": "Text",
+        "inputs": [
+          {
+            "name": "text",
+            "type": "string"
+          },
+          {
+            "name": "delimiter",
+            "type": "string"
+          }
+        ],
+        "output": "array",
+        "description": "Splits text by delimiter into array.",
+        "example": "Text.Split('a-b-c', '-') → ['a', 'b', 'c']",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      },
+      {
+        "op": "Text.Replace",
+        "category": "Text",
+        "inputs": [
+          {
+            "name": "text",
+            "type": "string"
+          },
+          {
+            "name": "find",
+            "type": "string"
+          },
+          {
+            "name": "replace",
+            "type": "string"
+          }
+        ],
+        "output": "string",
+        "description": "Replaces all occurrences of find with replace.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      },
+      {
+        "op": "Text.Template",
+        "category": "Text",
+        "inputs": [
+          {
+            "name": "template",
+            "type": "string",
+            "description": "Template with {{key}} placeholders"
+          },
+          {
+            "name": "data",
+            "type": "json"
+          }
+        ],
+        "output": "string",
+        "description": "Fills template placeholders with data values.",
+        "example": "Text.Template('Hello {{name}}', {name: 'World'}) → 'Hello World'",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
       }
     ],
     "sanitizer": [
@@ -121,6 +225,62 @@
           "bounded": true,
           "deterministic": true,
           "inputTaint": 2,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "Sanitizer.Clamp",
+        "category": "Sanitizer",
+        "inputs": [
+          {
+            "name": "value",
+            "type": "number"
+          },
+          {
+            "name": "min",
+            "type": "number"
+          },
+          {
+            "name": "max",
+            "type": "number"
+          }
+        ],
+        "output": "number",
+        "description": "Clamps number to safe bounds. Downgrades taint level.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "Sanitizer.Truncate",
+        "category": "Sanitizer",
+        "inputs": [
+          {
+            "name": "text",
+            "type": "string"
+          },
+          {
+            "name": "maxLength",
+            "type": "number"
+          }
+        ],
+        "output": "string",
+        "description": "Truncates text to max length. Downgrades taint level.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
           "outputTaint": 0
         }
       }
@@ -251,6 +411,65 @@
         "properties": {
           "complexity": 1,
           "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "Math.Clamp",
+        "category": "Math",
+        "inputs": [
+          {
+            "name": "value",
+            "type": "number"
+          },
+          {
+            "name": "min",
+            "type": "number"
+          },
+          {
+            "name": "max",
+            "type": "number"
+          }
+        ],
+        "output": "number",
+        "description": "Clamps value to be within min and max bounds.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "Math.Normalize",
+        "category": "Math",
+        "inputs": [
+          {
+            "name": "value",
+            "type": "number"
+          },
+          {
+            "name": "min",
+            "type": "number"
+          },
+          {
+            "name": "max",
+            "type": "number"
+          }
+        ],
+        "output": "number",
+        "description": "Normalizes value to 0-1 range based on min/max.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
           "bounded": true,
           "deterministic": true,
           "outputTaint": 0
@@ -493,9 +712,77 @@
           "deterministic": true,
           "outputTaint": 2
         }
+      },
+      {
+        "op": "List.GroupBy",
+        "category": "List",
+        "inputs": [
+          {
+            "name": "list",
+            "type": "array"
+          },
+          {
+            "name": "key",
+            "type": "string"
+          }
+        ],
+        "output": "json",
+        "description": "Groups list elements by a key property.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      },
+      {
+        "op": "List.Length",
+        "category": "List",
+        "inputs": [
+          {
+            "name": "list",
+            "type": "array"
+          }
+        ],
+        "output": "number",
+        "description": "Returns the length of the list.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
       }
     ],
     "image": [
+      {
+        "op": "Image.Decode",
+        "category": "Image",
+        "inputs": [
+          {
+            "name": "data",
+            "type": "string",
+            "description": "DataURL or base64 image data"
+          }
+        ],
+        "output": "image",
+        "description": "Decodes image data into pixel buffer for processing.",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 5,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      },
       {
         "op": "Image.Grayscale",
         "category": "Image",
@@ -610,9 +897,149 @@
           "deterministic": true,
           "outputTaint": 1
         }
+      },
+      {
+        "op": "Image.Blur",
+        "category": "Image",
+        "inputs": [
+          {
+            "name": "image",
+            "type": "image",
+            "description": "DataURL of image"
+          }
+        ],
+        "output": "image",
+        "description": "Applies Gaussian blur to image",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 10,
+          "idempotent": true,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      }
+    ],
+    "cv": [
+      {
+        "op": "CV.ContourTrace",
+        "category": "CV",
+        "inputs": [
+          {
+            "name": "image",
+            "type": "image"
+          }
+        ],
+        "output": "array",
+        "description": "Traces contours in binary image using marching squares. Returns array of path points.",
+        "example": "CV.ContourTrace(binaryImage) → [[{x,y}, ...], ...]",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 10,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      },
+      {
+        "op": "CV.Vectorize",
+        "category": "CV",
+        "inputs": [
+          {
+            "name": "image",
+            "type": "image"
+          }
+        ],
+        "output": "svg",
+        "description": "Full vectorization: edge detect → contour trace → SVG paths.",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 10,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      }
+    ],
+    "vector": [
+      {
+        "op": "Vector.ToSVG",
+        "category": "Vector",
+        "inputs": [
+          {
+            "name": "paths",
+            "type": "array",
+            "description": "Array of path point arrays"
+          }
+        ],
+        "output": "svg",
+        "description": "Converts path point arrays to SVG string.",
+        "example": "Vector.ToSVG([[{x:0,y:0}, {x:10,y:10}]]) → \"<svg>...\"",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      },
+      {
+        "op": "Vector.Simplify",
+        "category": "Vector",
+        "inputs": [
+          {
+            "name": "paths",
+            "type": "array"
+          },
+          {
+            "name": "tolerance",
+            "type": "number"
+          }
+        ],
+        "output": "array",
+        "description": "Reduces path complexity using Douglas-Peucker algorithm.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
       }
     ],
     "audio": [
+      {
+        "op": "Audio.Decode",
+        "category": "Audio",
+        "inputs": [
+          {
+            "name": "data",
+            "type": "string",
+            "description": "DataURL of audio"
+          }
+        ],
+        "output": "audio",
+        "description": "Decodes audio data into PCM buffer for processing.",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 10,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      },
       {
         "op": "Audio.FFT",
         "category": "Audio",
@@ -652,6 +1079,79 @@
         "async": true,
         "properties": {
           "complexity": 10,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 0
+        }
+      },
+      {
+        "op": "Audio.BeatDetect",
+        "category": "Audio",
+        "inputs": [
+          {
+            "name": "audio",
+            "type": "audio"
+          }
+        ],
+        "output": "array",
+        "description": "Detects beat timestamps in audio. Returns array of time markers.",
+        "tier": 2,
+        "pure": true,
+        "async": true,
+        "properties": {
+          "complexity": 10,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 1
+        }
+      }
+    ],
+    "debug": [
+      {
+        "op": "Debug.TraceInsert",
+        "category": "Debug",
+        "inputs": [
+          {
+            "name": "value",
+            "type": "any"
+          },
+          {
+            "name": "label",
+            "type": "string"
+          }
+        ],
+        "output": "any",
+        "description": "Logs value with label for debugging, passes through unchanged.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 1,
+          "bounded": true,
+          "deterministic": true,
+          "outputTaint": 2
+        }
+      },
+      {
+        "op": "Debug.DiffState",
+        "category": "Debug",
+        "inputs": [
+          {
+            "name": "before",
+            "type": "json"
+          },
+          {
+            "name": "after",
+            "type": "json"
+          }
+        ],
+        "output": "json",
+        "description": "Returns the difference between two state objects.",
+        "tier": 1,
+        "pure": true,
+        "async": false,
+        "properties": {
+          "complexity": 5,
           "bounded": true,
           "deterministic": true,
           "outputTaint": 0
