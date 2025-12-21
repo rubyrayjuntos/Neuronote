@@ -589,6 +589,157 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
           );
       }
 
+      // ========================================================================
+      // HIERARCHICAL COMPONENT TYPES (Manifest-compatible)
+      // ========================================================================
+      
+      // Layout types
+      case 'Layout.Stack': 
+      case 'Layout.Container':
+      case 'Layout.Card':
+          return <div key={nodeKey} {...commonProps}>{childrenContent}</div>;
+      
+      // Display types
+      case 'Display.Text':
+      case 'Output.Text':
+          return <div key={nodeKey} {...commonProps}>{textBinding ? data[textBinding] : (props.label || childrenContent)}</div>;
+      
+      case 'Display.Header':
+          return <h1 key={nodeKey} {...commonProps}>{textBinding ? data[textBinding] : (props.label || childrenContent)}</h1>;
+      
+      case 'Display.Canvas':
+      case 'Output.Canvas':
+      case 'Output.VectorCanvas':
+          return <CanvasPrimitive key={nodeKey} src={textBinding ? data[textBinding] : undefined} {...commonProps} />;
+      
+      case 'Display.Chart':
+      case 'Output.Chart':
+          return <ChartPrimitive key={nodeKey} data={textBinding ? (data[textBinding] || []) : []} {...commonProps} />;
+      
+      case 'Display.Clock':
+          return <ClockPrimitive key={nodeKey} {...commonProps} />;
+      
+      case 'Display.Icon':
+          { const iconName = (props.name as string) || 'HelpCircle'; const IconComp = (Icons as Record<string, React.FC>)[iconName] || Icons.HelpCircle; return <IconComp key={nodeKey} {...commonProps} onClick={handleClick} />; }
+      
+      case 'Display.List':
+          {
+              const key = (props.binding as string) || textBinding || valueBinding;
+              const items = (key && Array.isArray(data[key as keyof typeof data])) ? (data[key as keyof typeof data] as unknown[]) : [];
+              return (
+                  <div key={nodeKey} {...commonProps}>
+                      {items.length === 0 && <div className="text-zinc-600 italic p-2">No items</div>}
+                      {items.map((item: any, idx: number) => {
+                          const isActor = typeof item === 'string' && item.startsWith('actor_');
+                          if (isActor && children && children.length > 0) return <div key={item} className="mb-2 last:mb-0">{children.map(child => <React.Fragment key={child.id}>{renderNode(child, item)}</React.Fragment>)}</div>
+                          else return <div key={idx} className="p-3 border-b border-zinc-800 last:border-0">{typeof item === 'string' ? item : JSON.stringify(item)}</div>;
+                      })}
+                  </div>
+              );
+          }
+      
+      // Control types
+      case 'Control.Button':
+          return <button key={nodeKey} {...commonProps} onClick={handleClick}>{props.label || childrenContent || 'Button'}</button>;
+      
+      // Input types - File inputs
+      case 'Input.Image':
+      case 'Input.Audio':
+      case 'Input.Text':
+      case 'Input.CSV':
+      case 'Input.JSON':
+      case 'Input.File':
+      case 'Input.Dropzone':
+          {
+              const accept = type === 'Input.Image' ? 'image/*' 
+                  : type === 'Input.Audio' ? 'audio/*'
+                  : type === 'Input.CSV' ? '.csv'
+                  : type === 'Input.JSON' ? '.json'
+                  : type === 'Input.Text' ? '.txt,.md'
+                  : (props.accept as string) || '*/*';
+              
+              const handleFileEvent = (val: string) => {
+                  onInteraction({ id: generateUUID(), timestamp: Date.now(), type: 'input', targetId: id, event: (node.onEvent as string) || onChange || 'FILE_SELECTED' });
+                  if (valueBinding) sendEvent(`UPDATE_CONTEXT:${valueBinding}`, val, scopeId);
+                  // Dispatch the onEvent (e.g., FILE_SELECTED)
+                  const eventName = (node.onEvent as string) || onChange;
+                  if (eventName) sendEvent(eventName, val, scopeId);
+              };
+              
+              return <FileInputPrimitive key={nodeKey} onChange={handleFileEvent} accept={accept} {...commonProps} />;
+          }
+      
+      // Input types - Interactive inputs
+      case 'Input.TextField':
+          return <input key={nodeKey} {...commonProps} type="text" placeholder={(props.placeholder as string) || ''} value={valueBinding ? (data[valueBinding] || '') : undefined} onChange={handleInput} />;
+      
+      case 'Input.TextArea':
+          return <textarea key={nodeKey} {...commonProps} placeholder={(props.placeholder as string) || ''} value={valueBinding ? (data[valueBinding] || '') : undefined} onChange={handleInput} />;
+      
+      case 'Input.Slider':
+          {
+              const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+                  const val = Number(e.target.value);
+                  onInteraction({ id: generateUUID(), timestamp: Date.now(), type: 'input', targetId: id, event: (node.onEvent as string) || onChange || 'VALUE_CHANGED' });
+                  if (valueBinding) sendEvent(`UPDATE_CONTEXT:${valueBinding}`, val, scopeId);
+                  const eventName = (node.onEvent as string) || onChange;
+                  if (eventName) sendEvent(eventName, val, scopeId);
+              };
+              return <input key={nodeKey} type="range" {...commonProps} min={(props.min as number) || 0} max={(props.max as number) || 100} step={(props.step as number) || 1} value={valueBinding ? (data[valueBinding] || 0) : 0} onChange={handleSliderChange} />;
+          }
+      
+      case 'Input.Toggle':
+          {
+              const checked = valueBinding ? !!data[valueBinding] : false;
+              const handleToggle = () => {
+                  onInteraction({ id: generateUUID(), timestamp: Date.now(), type: 'input', targetId: id, event: (node.onEvent as string) || onChange || 'VALUE_CHANGED' });
+                  if (valueBinding) sendEvent(`UPDATE_CONTEXT:${valueBinding}`, !checked, scopeId);
+                  const eventName = (node.onEvent as string) || onChange;
+                  if (eventName) sendEvent(eventName, !checked, scopeId);
+              };
+              return (
+                  <label key={nodeKey} className={`flex items-center gap-2 cursor-pointer ${props.className || ''}`}>
+                      <div onClick={handleToggle} className={`w-10 h-6 rounded-full relative transition-colors ${checked ? 'bg-indigo-600' : 'bg-zinc-700'}`}>
+                          <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-5' : 'translate-x-1'}`} />
+                      </div>
+                      {props.label && <span className="text-sm">{props.label}</span>}
+                  </label>
+              );
+          }
+      
+      case 'Input.ColorPicker':
+          {
+              const handleColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+                  const val = e.target.value;
+                  onInteraction({ id: generateUUID(), timestamp: Date.now(), type: 'input', targetId: id, event: (node.onEvent as string) || onChange || 'VALUE_CHANGED' });
+                  if (valueBinding) sendEvent(`UPDATE_CONTEXT:${valueBinding}`, val, scopeId);
+                  const eventName = (node.onEvent as string) || onChange;
+                  if (eventName) sendEvent(eventName, val, scopeId);
+              };
+              return <input key={nodeKey} type="color" {...commonProps} value={valueBinding ? (data[valueBinding] || '#000000') : '#000000'} onChange={handleColorChange} />;
+          }
+      
+      // Output types (additional)
+      case 'Output.Toast':
+          {
+              const isVisible = valueBinding ? !!data[valueBinding] : false;
+              const message = textBinding ? String(data[textBinding] || '') : (props.message as string) || '';
+              const toastType = (props.type as 'info' | 'success' | 'error' | 'warning') || 'info';
+              return <ToastPrimitive isVisible={isVisible} message={message} type={toastType} className={props.className as string} />;
+          }
+      
+      case 'Output.Progress':
+          {
+              const value = valueBinding ? Math.min(100, Math.max(0, Number(data[valueBinding]) || 0)) 
+                  : textBinding ? Math.min(100, Math.max(0, Number(data[textBinding]) || 0)) : 0;
+              const color = (props.color as string) || '#6366f1';
+              return (
+                  <div key={nodeKey} className={`w-full h-2 bg-zinc-800 rounded-full overflow-hidden ${props.className || ''}`}>
+                      <div className="h-full transition-all duration-300 ease-out rounded-full" style={{ width: `${value}%`, backgroundColor: color }} />
+                  </div>
+              );
+          }
+
       default: return <div className="text-red-500">Unknown Node: {type}</div>;
     }
   };
