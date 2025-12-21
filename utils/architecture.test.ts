@@ -119,9 +119,9 @@ describe('Prompt Builder', () => {
     }
   });
 
-  it('should include verification vectors section', () => {
+  it('should include testVectors section', () => {
     const prompt = buildCapabilityPrompt();
-    expect(prompt).toContain('verificationVectors');
+    expect(prompt).toContain('testVectors');
   });
 
   it('should build user prompt with current definition', () => {

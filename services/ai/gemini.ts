@@ -89,12 +89,13 @@ const APP_DEFINITION_SCHEMA = {
       "required": ["id", "type"],
       "properties": {
         "id": { "type": "string" },
-        "type": { "type": "string", "enum": ["container", "text", "button", "input", "file-input", "slider", "canvas", "chart", "list"] },
+        "type": { "type": "string", "description": "Component type (e.g., Input.Image, Display.Canvas, Layout.Stack, Control.Button, or legacy: container, text, button)" },
         "props": { "type": "object" },
         "children": { "type": "array" },
         "textBinding": { "type": "string" },
         "valueBinding": { "type": "string" },
-        "onClick": { "type": "string" }
+        "onClick": { "type": "string" },
+        "onEvent": { "type": "string", "description": "Event name to dispatch (e.g., FILE_SELECTED, VALUE_CHANGED, CLICK)" }
       }
     },
     "testVectors": {

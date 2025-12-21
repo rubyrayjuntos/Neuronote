@@ -4,12 +4,26 @@
 
 // 1. View Schema (The UI Structure)
 export type NodeType = 
+  // Legacy flat types (still supported)
   | 'container' | 'text' | 'button' | 'input' | 'header' | 'list' | 'tabs' | 'card' 
   | 'element' | 'icon' | 'chart' | 'clock' 
   | 'file-input' | 'slider' | 'canvas'
   | 'text-input' | 'text-display'
   // HOST PRIMITIVES - Safe overlay patterns (use instead of fixed/absolute positioning)
-  | 'modal' | 'toast' | 'dropdown' | 'tooltip' | 'popover'; 
+  | 'modal' | 'toast' | 'dropdown' | 'tooltip' | 'popover'
+  // Hierarchical Input types (Layer 1 - Embodied I/O)
+  | 'Input.Image' | 'Input.Audio' | 'Input.Text' | 'Input.CSV' | 'Input.JSON'
+  | 'Input.Slider' | 'Input.Toggle' | 'Input.TextField' | 'Input.TextArea'
+  | 'Input.Dropzone' | 'Input.ColorPicker' | 'Input.File'
+  // Hierarchical Display/Output types (Layer 1)
+  | 'Display.Text' | 'Display.Canvas' | 'Display.List' | 'Display.Chart'
+  | 'Display.Header' | 'Display.Clock' | 'Display.Icon'
+  | 'Output.Canvas' | 'Output.VectorCanvas' | 'Output.Chart' | 'Output.Timeline'
+  | 'Output.Text' | 'Output.Toast' | 'Output.Progress'
+  // Control types
+  | 'Control.Button'
+  // Layout types
+  | 'Layout.Stack' | 'Layout.Container' | 'Layout.Card'; 
 
 export interface ViewNode {
   id: string;

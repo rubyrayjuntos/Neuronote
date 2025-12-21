@@ -735,6 +735,31 @@ const ToastFactory: ComponentFactory = (props) => {
   );
 };
 
+/**
+ * Output.Progress - Progress bar
+ */
+const ProgressFactory: ComponentFactory = (props) => {
+  const { data, valueBinding, textBinding, className, style } = props;
+  
+  // Get progress value (0-100)
+  const value = valueBinding && data[valueBinding] !== undefined 
+    ? Math.min(100, Math.max(0, Number(data[valueBinding])))
+    : textBinding && data[textBinding] !== undefined
+    ? Math.min(100, Math.max(0, Number(data[textBinding])))
+    : 0;
+  
+  const color = (props.color as string) || '#6366f1';
+  
+  return (
+    <div className={`w-full h-2 bg-zinc-800 rounded-full overflow-hidden ${className || ''}`} style={style}>
+      <div 
+        className="h-full transition-all duration-300 ease-out rounded-full"
+        style={{ width: `${value}%`, backgroundColor: color }}
+      />
+    </div>
+  );
+};
+
 // ============================================================================
 // THE COMPONENT REGISTRY
 // ============================================================================
@@ -835,6 +860,14 @@ export const COMPONENT_REGISTRY: Record<string, ComponentRegistration> = {
   'clock': { factory: ClockFactory, description: 'Alias for Display.Clock', props: [] },
   'icon': { factory: IconFactory, description: 'Alias for Display.Icon', props: [] },
   'list': { factory: ListFactory, description: 'Alias for Display.List', props: [] },
+  
+  // Output.* aliases (map to Display.* equivalents)
+  'Output.Text': { factory: TextFactory, description: 'Alias for Display.Text (manifest compatibility)', props: [], inputType: 'string' },
+  'Output.Canvas': { factory: CanvasFactory, description: 'Alias for Display.Canvas (manifest compatibility)', props: [], inputType: 'image' },
+  'Output.VectorCanvas': { factory: CanvasFactory, description: 'Vector rendering canvas (SVG mode)', props: [], inputType: 'svg' },
+  'Output.Chart': { factory: ChartFactory, description: 'Alias for Display.Chart (manifest compatibility)', props: [], inputType: 'array' },
+  'Output.Toast': { factory: ToastFactory, description: 'Toast notification output', props: [], inputType: 'string' },
+  'Output.Progress': { factory: ProgressFactory, description: 'Progress bar output', props: [], inputType: 'number' },
   
   // === CONTROL COMPONENTS ===
   'Control.Button': {

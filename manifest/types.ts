@@ -377,6 +377,6 @@ export interface GuestProposal {
     };
   };
   
-  /** Verification vectors for Honesty Oracle */
-  verificationVectors: VerificationVector[];
+  /** Test vectors for Honesty Oracle */
+  testVectors: VerificationVector[];
 }

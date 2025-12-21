@@ -54,7 +54,7 @@ Your output is a JSON "blueprint" with four sections:
   "pipelines": { ... },                // COMPUTATION GRAPHS: DAGs of Layer 2 operators
   "machine": { ... },                  // STATE MACHINE: Layer 3 capabilities
   "view": { ... },                     // VIEW TREE: Layer 1 UI components
-  "verificationVectors": [ ... ]       // PROOFS: mock inputs + expected outputs
+  "testVectors": [ ... ]               // PROOFS: mock inputs + expected outputs
 }
 
 ═══════════════════════════════════════════════════════════════════
@@ -183,7 +183,7 @@ LEGACY ALIASES (also work):
 - "container", "text", "button", "input", "list", "slider", "canvas", "file-input"
 
 ═══════════════════════════════════════════════════════════════════
-SECTION 5: verificationVectors (Honesty Oracle)
+SECTION 5: testVectors (Honesty Oracle)
 ═══════════════════════════════════════════════════════════════════
 Test vectors verify your proposal before execution.
 The Host runs these to detect hallucinations.
@@ -211,7 +211,7 @@ RULES:
 - TOGGLE:key → modifies "key"
 
 EXAMPLE:
-"verificationVectors": [
+"testVectors": [
   {
     "name": "Adding a task updates the list",
     "steps": [
@@ -252,6 +252,8 @@ COMPLETE EXAMPLE: Image Processor
     "states": {
       "idle": {
         "on": {
+          "FILE_SELECTED": { "actions": ["ASSIGN:sourceImage"] },
+          "VALUE_CHANGED": { "actions": ["ASSIGN:threshold"] },
           "APPLY": { "actions": ["RUN:processImage:processedImage"] }
         }
       }
@@ -263,13 +265,13 @@ COMPLETE EXAMPLE: Image Processor
     "props": { "direction": "column", "className": "p-4 gap-4" },
     "children": [
       { "id": "title", "type": "Display.Header", "label": "Image Processor" },
-      { "id": "upload", "type": "Input.File", "valueBinding": "sourceImage", "accept": "image/*" },
-      { "id": "slider", "type": "Input.Slider", "valueBinding": "threshold", "min": 0, "max": 255 },
-      { "id": "applyBtn", "type": "Control.Button", "onClick": "APPLY", "label": "Process" },
+      { "id": "upload", "type": "Input.Image", "onEvent": "FILE_SELECTED" },
+      { "id": "slider", "type": "Input.Slider", "valueBinding": "threshold", "onEvent": "VALUE_CHANGED", "min": 0, "max": 255 },
+      { "id": "applyBtn", "type": "Control.Button", "onEvent": "APPLY", "label": "Process" },
       { "id": "output", "type": "Display.Canvas", "textBinding": "processedImage" }
     ]
   },
-  "verificationVectors": [
+  "testVectors": [
     {
       "name": "Process updates output",
       "steps": [
@@ -323,7 +325,7 @@ ${JSON.stringify(currentDef, null, 2)}
 4. When adding features, MERGE them into existing structure
 5. When modifying properties, update ONLY that property
 6. Always preserve all existing functionality
-7. Include verificationVectors that prove the behavior works
+7. Include testVectors that prove the behavior works
 <<<END_INSTRUCTIONS>>>
 
 <<<USER_REQUEST>>>
