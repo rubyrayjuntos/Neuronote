@@ -34,8 +34,8 @@ const prop = (k) => (s) => Store(
             copy[k] = v;
             return copy;
         }
-        // Handle null/undefined state by creating object
-        const base = s ?? {};
+        // Ensure base is an object before property update
+        const base = (s !== null && typeof s === 'object') ? s : {};
         return { ...base, [k]: v };
     }
 );
