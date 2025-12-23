@@ -34,8 +34,8 @@ const prop = (k) => (s) => Store(
             copy[k] = v;
             return copy;
         }
-        // Handle undefined state by creating object
-        const base = s || {};
+        // Handle null/undefined state by creating object
+        const base = s ?? {};
         return { ...base, [k]: v };
     }
 );
