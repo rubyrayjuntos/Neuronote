@@ -79,11 +79,11 @@ const buildLensPath = (scopeId, key) => {
 /**
  * Merge Lens: Immutably merge newData into existing object
  * @param {Object} state - Current state object
- * @param {Object} newData - Data to merge in
+ * @param {Object} newData - Data to merge in (must be an object, not an array)
  * @returns {Object} New object with merged data
  */
 const mergeLens = (state, newData) => {
-    if (!newData || typeof newData !== 'object') return state;
+    if (!newData || typeof newData !== 'object' || Array.isArray(newData)) return state;
     const base = state ?? {};
     return { ...base, ...newData };
 };
@@ -96,8 +96,7 @@ const mergeLens = (state, newData) => {
  */
 const deleteLens = (state, key) => {
     if (!state || typeof state !== 'object') return state;
-    const result = { ...state };
-    delete result[key];
+    const { [key]: _, ...result } = state;
     return result;
 };
 `;
@@ -171,6 +170,9 @@ const CAPABILITY_MANIFEST = {
              setScopedData({ [listKey]: [...list, newId] });
              
              // Use lenses to immutably update _sys.actorStates
+             // Note: Three separate lens operations are needed because each updates
+             // a different path in the context tree. Batching is not possible without
+             // a more complex transaction mechanism.
              const actorStatesLens = lensPath('_sys.actorStates.' + newId);
              const statesStore = actorStatesLens(context);
              context = statesStore.peek(definition.actors[actorType].initial);
