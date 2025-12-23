@@ -1,0 +1,66 @@
+# list of languages for which language servers are started; choose from:
+#   al               bash             clojure          cpp              csharp           csharp_omnisharp
+#   dart             elixir           elm              erlang           fortran          go
+#   haskell          java             julia            kotlin           lua              markdown
+#   nix              perl             php              python           python_jedi      r
+#   rego             ruby             ruby_solargraph  rust             scala            swift
+#   terraform        typescript       typescript_vts   yaml             zig
+# Note:
+#   - For C, use cpp
+#   - For JavaScript, use typescript
+# Special requirements:
+#   - csharp: Requires the presence of a .sln file in the project folder.
+# When using multiple languages, the first language server that supports a given file will be used for that file.
+# The first language is the default language and the respective language server will be used as a fallback.
+# Note that when using the JetBrains backend, language servers are not used and this list is correspondingly ignored.
+languages:
+- typescript
+- markdown
+
+# the encoding used by text files in the project
+encoding: "utf-8"
+
+# whether to use the project's gitignore file to ignore files
+ignore_all_files_in_gitignore: true
+
+# list of additional paths to ignore
+ignored_paths:
+- "node_modules/**"
+- "dist/**"
+- ".git/**"
+- "*.lock"
+
+# whether the project is in read-only mode
+read_only: false
+
+# Full tool access for maximum capability
+excluded_tools: []
+
+# initial prompt for the project - provides key context for every session
+initial_prompt: |
+  # NeuroNote Project Context
+  
+  This is a TypeScript/React research POC for "Dual-Kernel Architecture for Safe Malleable Software".
+  
+  ## Critical Architecture Components
+  - **OPERATOR_REGISTRY** (46 operators): operators/registry.ts - Pure functions for pipelines
+  - **3-Phase Gatekeeper**: utils/validator.ts - Security validation (structural, semantic, honesty)
+  - **SerenaBridge**: services/SerenaBridge.ts - Two-phase retrieval for AI providers
+  - **LSI Pattern**: Lens/Store/Isomorphism for atomic state rollback
+  
+  ## Key Patterns
+  - All operators are PURE (no side effects)
+  - State updates through Store.peek() comonad
+  - testVectors required for pipeline honesty proofs
+  - System keys prefixed with underscore (_)
+  
+  ## Quick Commands
+  - npm test (257 tests expected)
+  - npx tsc --noEmit (type check)
+  - npm run dev (start dev server)
+
+project_name: "NeuroNote"
+
+# Enable shell commands for flexibility
+included_optional_tools:
+- execute_shell_command

@@ -8,6 +8,19 @@
 export * from './types.ts';
 export { OPERATOR_REGISTRY } from './registry.ts';
 
+// Menu exports for SerenaBridge two-phase retrieval
+export {
+  generateMenu,
+  generateMenuString,
+  getFullSpecs,
+  getFullSpecsString,
+  searchOperators,
+  getCategories,
+  getOperatorsByCategory as getOperatorIdsByCategory,
+  type MenuEntry,
+  type FullOperatorSpec,
+} from './menu.ts';
+
 import { OperatorDefinition } from './types.ts';
 import { OPERATOR_REGISTRY } from './registry.ts';
 import { OperatorType, OperatorSchema, DataType } from '../types.ts';

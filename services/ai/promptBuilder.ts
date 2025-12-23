@@ -9,17 +9,55 @@
  * - AI outputs a Declarative Graph (Wire Protocol)
  * - AI cannot invent primitives - only wire what exists
  * - AI provides Verification Vectors for the Honesty Oracle
+ * 
+ * OPTIMIZATION: Two-Phase "Diner Menu" Pattern
+ * - Phase 1 (useMenu=true): Send abbreviated operator menu (~500 tokens)
+ * - Phase 2 (selectedOperators): Send full specs for selected operators only
+ * - This reduces token usage by ~90% while preventing hallucination
  */
 
 import { generateManifestForPrompt } from '../../manifest';
 import { generateComponentDocsForPrompt } from '../../runtime/ComponentRegistry';
 import { generateOperatorDocs } from '../../operators';
+import { SerenaBridge } from '../SerenaBridge';
+import { PromptOptions } from './types';
+
+/**
+ * Build the operator section based on PromptOptions.
+ * This is the core of the two-phase "Diner Menu" pattern.
+ * 
+ * @param options - Prompt options controlling operator presentation
+ * @returns Formatted operator section for the system prompt
+ */
+export function buildOperatorSection(options?: PromptOptions): string {
+  const bridge = new SerenaBridge();
+  
+  if (options?.selectedOperators && options.selectedOperators.length > 0) {
+    // Phase 2: Full specs for selected operators only
+    return bridge.buildSpecsPrompt(options.selectedOperators);
+  } else if (options?.useMenu) {
+    // Phase 1: Abbreviated menu only (saves ~90% tokens)
+    return bridge.buildMenuPrompt();
+  } else if (options?.categories && options.categories.length > 0) {
+    // Filtered: Full specs for specific categories
+    return bridge.buildFullPrompt(options.categories);
+  } else {
+    // Default: Full docs for all operators (legacy behavior)
+    return `═══════════════════════════════════════════════════════════════════
+AVAILABLE OPERATORS (Layer 2 - Full Reference)
+═══════════════════════════════════════════════════════════════════
+
+${generateOperatorDocs()}`;
+  }
+}
 
 /**
  * Build the complete system prompt for the AI Guest.
  * This is the manifest-driven prompt that teaches the AI the Three-Layer Hierarchy.
+ * 
+ * @param options - Optional PromptOptions for two-phase retrieval
  */
-export function buildCapabilityPrompt(): string {
+export function buildCapabilityPrompt(options?: PromptOptions): string {
   return `You are the Guest Architect for NeuroNote - a sandboxed environment where you design tools by wiring pure primitives.
 
 ═══════════════════════════════════════════════════════════════════
@@ -220,11 +258,7 @@ EXAMPLE:
   }
 ]
 
-═══════════════════════════════════════════════════════════════════
-AVAILABLE OPERATORS (Layer 2 - Full Reference)
-═══════════════════════════════════════════════════════════════════
-
-${generateOperatorDocs()}
+${buildOperatorSection(options)}
 
 ═══════════════════════════════════════════════════════════════════
 COMPLETE EXAMPLE: Image Processor

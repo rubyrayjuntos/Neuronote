@@ -1,7 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { AppDefinition } from "../../types";
-import { AIProvider, AIProviderConfig, AIProviderWithCapabilities, ExecutionFeedback, ModelCapabilities } from "./types";
-import { generateOperatorDocs } from "../../operators";
+import { AIProvider, AIProviderConfig, AIProviderWithCapabilities, ExecutionFeedback, ModelCapabilities, PromptOptions } from "./types";
+import { buildOperatorSection } from "./promptBuilder";
 
 /**
  * Validates that a parsed object has the minimum required shape of an AppDefinition.
@@ -120,13 +120,21 @@ const APP_DEFINITION_SCHEMA = {
  * 2. Clear delimiters
  * 3. Concrete examples
  * 4. Error handling format
+ * 
+ * Supports two-phase "Diner Menu" pattern:
+ * - Phase 1 (useMenu=true): Send abbreviated operator menu
+ * - Phase 2 (selectedOperators): Send full specs for AI's selection
  */
 export function buildSystemPrompt(
   currentDef: AppDefinition,
   feedback?: ExecutionFeedback | null,
-  additions?: string
+  additions?: string,
+  options?: PromptOptions
 ): string {
   const versionExample = `v${new Date().toISOString().slice(0, 16).replace('T', '-')}`;
+  
+  // Build operator section using shared builder (supports two-phase retrieval)
+  const operatorSection = buildOperatorSection(options);
   
   // Build feedback section if previous attempt failed
   const feedbackSection = feedback ? `
@@ -166,14 +174,12 @@ ACTIONS: Use "RUN:pipelineName:outputKey" to run pipeline and store result, "RES
 <<<END_CRITICAL_RULES>>>
 ${feedbackSection}
 ${customAdditions}
-<<<OPERATORS>>>
-${generateOperatorDocs()}
+${operatorSection}
 
 UI Types: container, text, button, input, file-input, slider, canvas, chart, list
 - input/slider/file-input: use "valueBinding" to bind to context key
 - text/canvas/chart/list: use "textBinding" to display context value
 - button: use "onClick" to trigger event
-<<<END_OPERATORS>>>
 
 <<<EXAMPLE>>>
 User request: "add a task list"

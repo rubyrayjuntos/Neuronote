@@ -466,8 +466,8 @@ export default function App() {
       
       ObservabilityService.recordPhase('VALIDATION_HONESTY', {
         passed: honestyResult.passed,
+        confidence: honestyResult.confidence,
         concerns: honestyResult.concerns,
-        promptKeywords: honestyResult.promptKeywords
       }, `Honesty Oracle: ${honestyResult.passed ? 'PASSED' : 'FAILED'}, ${honestyResult.concerns.length} concerns`);
       
       addLog({ 

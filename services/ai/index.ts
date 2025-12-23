@@ -18,7 +18,8 @@ export type {
   AIProviderWithCapabilities,
   ExecutionFeedback,
   ModelCapabilities,
-  ProviderType 
+  ProviderType,
+  PromptOptions 
 } from './types';
 
 export { extractExecutionFeedback } from './types';
@@ -27,7 +28,7 @@ export { extractExecutionFeedback } from './types';
 export { GeminiProvider, createGeminiProvider, buildSystemPrompt } from './gemini';
 export { BedrockProvider, createBedrockClaudeProvider, createBedrockLlamaProvider, createBedrockMistralProvider } from './bedrock';
 export { GroqProvider, createGroqProvider } from './groq';
-export { buildCapabilityPrompt, buildUserPrompt } from './promptBuilder';
+export { buildCapabilityPrompt, buildUserPrompt, buildOperatorSection } from './promptBuilder';
 export type { BedrockConfig } from './bedrock';
 export type { GroqConfig } from './groq';
 

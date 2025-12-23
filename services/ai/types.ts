@@ -128,3 +128,15 @@ export interface ModelCapabilities {
 export interface AIProviderWithCapabilities extends AIProvider {
   readonly capabilities: ModelCapabilities;
 }
+/**
+ * Options for system prompt generation.
+ * Used by SerenaBridge for two-phase "Diner Menu" retrieval.
+ */
+export interface PromptOptions {
+  /** Use abbreviated menu instead of full specs (saves ~90% tokens) */
+  useMenu?: boolean;
+  /** Specific operators to include full specs for (Phase 2) */
+  selectedOperators?: string[];
+  /** Relevant categories to filter operators */
+  categories?: string[];
+}

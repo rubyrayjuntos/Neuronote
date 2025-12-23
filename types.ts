@@ -36,6 +36,7 @@ export interface ViewNode {
   binding?: string;  // Generic data binding (used by list, chart, etc.)
   onClick?: string;
   onChange?: string;
+  onEvent?: string;  // Generic event binding (e.g., FILE_SELECTED, VALUE_CHANGED)
 }
 
 import { OPERATOR_REGISTRY } from "./operators";
