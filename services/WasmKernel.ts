@@ -64,6 +64,38 @@ const lensPath = (path) => {
         return acc ? compose(acc, nextLens) : nextLens;
     }, null);
 };
+
+/**
+ * Apply Lens Update: Encapsulates the pattern of applying a lens update to a state
+ * with scoped actor support (root vs actor-specific state).
+ * @param {any} state The global state object (context or globalContext)
+ * @param {string} path The lens path (e.g., "user.profile.name")
+ * @param {any} value The new value to set at the path
+ * @param {string} scopeId The scope identifier ('root' or actor ID)
+ * @returns {any} The updated state object
+ */
+const applyLensUpdate = (state, path, value, scopeId) => {
+    const focus = lensPath(path);
+    let targetState;
+
+    if (scopeId === 'root') {
+        targetState = state;
+    } else {
+        if (!state.actors) state.actors = {};
+        if (!state.actors[scopeId]) state.actors[scopeId] = {};
+        targetState = state.actors[scopeId];
+    }
+
+    const store = focus(targetState);
+    const nextState = store.peek(value);
+
+    if (scopeId === 'root') {
+        return nextState;
+    } else {
+        state.actors[scopeId] = nextState;
+        return state;
+    }
+};
 `;
 
 /**
@@ -222,27 +254,8 @@ globalThis.dispatch = function(event, payload, scopeId) {
     if (event.startsWith('UPDATE_CONTEXT')) {
         const key = event.split(':')[1];
 
-        // --- LENS INTEGRATION START ---
-        const focus = lensPath(key);
-        let targetState;
-
-        if (scopeId === 'root') {
-            targetState = context;
-        } else {
-            if (!context.actors) context.actors = {};
-            if (!context.actors[scopeId]) context.actors[scopeId] = {};
-            targetState = context.actors[scopeId];
-        }
-
-        const store = focus(targetState);
-        const nextState = store.peek(payload);
-
-        if (scopeId === 'root') {
-            context = nextState;
-        } else {
-            context.actors[scopeId] = nextState;
-        }
-        // --- LENS INTEGRATION END ---
+        // --- LENS INTEGRATION ---
+        context = applyLensUpdate(context, key, payload, scopeId);
 
         return { context, tasks: [] };
     }
@@ -1003,25 +1016,7 @@ self.onmessage = async (e) => {
                
                if (trace.status === 'success') {
                    // Merge Result using Lenses (LSI)
-                   const focus = lensPath(task.targetKey);
-                   let targetState;
-
-                   if (task.scopeId === 'root') {
-                       targetState = globalContext;
-                   } else {
-                       if (!globalContext.actors) globalContext.actors = {};
-                       if (!globalContext.actors[task.scopeId]) globalContext.actors[task.scopeId] = {};
-                       targetState = globalContext.actors[task.scopeId];
-                   }
-
-                   const store = focus(targetState);
-                   const nextState = store.peek(output);
-
-                   if (task.scopeId === 'root') {
-                       globalContext = nextState;
-                   } else {
-                       globalContext.actors[task.scopeId] = nextState;
-                   }
+                   globalContext = applyLensUpdate(globalContext, task.targetKey, output, task.scopeId);
                }
            }
        }
