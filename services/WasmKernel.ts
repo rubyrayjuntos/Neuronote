@@ -12,7 +12,7 @@ import { generateTier1OperatorsSource } from "../operators";
 
 const OPTICS_SOURCE = `
 // --- TRUE LENS IMPLEMENTATION (LSI) ---
-// See types/optics.ts for theoretical background.
+// Lens-based State Isolation for immutable state updates.
 
 /**
  * THE STORE COMONAD
@@ -63,6 +63,16 @@ const lensPath = (path) => {
         const nextLens = prop(key);
         return acc ? compose(acc, nextLens) : nextLens;
     }, null);
+};
+
+/**
+ * Build lens path for scoped updates
+ * @param {string} scopeId - 'root' for root context, or actor ID for scoped context
+ * @param {string} key - The property key to update
+ * @returns {string} The full lens path
+ */
+const buildLensPath = (scopeId, key) => {
+    return scopeId === 'root' ? key : 'actors.' + scopeId + '.' + key;
 };
 `;
 
@@ -224,7 +234,7 @@ globalThis.dispatch = function(event, payload, scopeId) {
 
         // --- LENS INTEGRATION START ---
         // Compose the full path including actors for scoped updates
-        const fullPath = scopeId === 'root' ? key : 'actors.' + scopeId + '.' + key;
+        const fullPath = buildLensPath(scopeId, key);
         const focus = lensPath(fullPath);
         
         const store = focus(context);
@@ -991,7 +1001,7 @@ self.onmessage = async (e) => {
                if (trace.status === 'success') {
                    // Merge Result using Lenses (LSI)
                    // Compose the full path including actors for scoped updates
-                   const fullPath = task.scopeId === 'root' ? task.targetKey : 'actors.' + task.scopeId + '.' + task.targetKey;
+                   const fullPath = buildLensPath(task.scopeId, task.targetKey);
                    const focus = lensPath(fullPath);
                    
                    const store = focus(globalContext);
