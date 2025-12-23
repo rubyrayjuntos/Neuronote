@@ -10,11 +10,69 @@ import {
 } from "../constants";
 import { generateTier1OperatorsSource } from "../operators";
 
+const OPTICS_SOURCE = `
+// --- TRUE LENS IMPLEMENTATION (LSI) ---
+// See standard literature on functional lenses/optics for theoretical background.
+
+/**
+ * THE STORE COMONAD
+ * @param {any} pos The View
+ * @param {Function} peek The Continuation (A -> S)
+ */
+const Store = (pos, peek) => ({ pos, peek });
+
+/**
+ * Prop Lens: Focus on a property 'k'
+ * Replaces: s[k]
+ */
+const prop = (k) => (s) => Store(
+    s ? s[k] : undefined,
+    (v) => {
+        // Enforce immutability
+        if (Array.isArray(s)) {
+            const copy = [...s];
+            copy[k] = v;
+            return copy;
+        }
+        // Handle null/undefined state by creating object
+        const base = s ?? {};
+        return { ...base, [k]: v };
+    }
+);
+
+/**
+ * Composition: (A->B) -> (B->C) -> (A->C)
+ * lens(A -> B) composed with lens(B -> C) creates lens(A -> C).
+ */
+const compose = (ab, bc) => (a) => {
+    const storeAB = ab(a);
+    const storeBC = bc(storeAB.pos);
+    return Store(
+        storeBC.pos,
+        (c) => storeAB.peek(storeBC.peek(c))
+    );
+};
+
+/**
+ * Path Lens: "user.profile.name" -> Lens(Context -> string)
+ */
+const lensPath = (path) => {
+    if (!path) return (s) => Store(s, (v) => v); // Identity
+    const keys = path.split('.');
+    return keys.reduce((acc, key) => {
+        const nextLens = prop(key);
+        return acc ? compose(acc, nextLens) : nextLens;
+    }, null);
+};
+`;
+
 /**
  * THE LOGIC KERNEL (Guest Code)
  * This runs inside QuickJS.
  */
 const KERNEL_SOURCE = `
+${OPTICS_SOURCE}
+
 let context = {};
 let definition = {};
 let pendingTasks = []; // Queue for Tier 2 tasks
@@ -163,12 +221,29 @@ globalThis.dispatch = function(event, payload, scopeId) {
 
     if (event.startsWith('UPDATE_CONTEXT')) {
         const key = event.split(':')[1];
-        if (scopeId === 'root') context[key] = payload;
-        else {
+
+        // --- LENS INTEGRATION START ---
+        const focus = lensPath(key);
+        let targetState;
+
+        if (scopeId === 'root') {
+            targetState = context;
+        } else {
             if (!context.actors) context.actors = {};
             if (!context.actors[scopeId]) context.actors[scopeId] = {};
-            context.actors[scopeId][key] = payload;
+            targetState = context.actors[scopeId];
         }
+
+        const store = focus(targetState);
+        const nextState = store.peek(payload);
+
+        if (scopeId === 'root') {
+            context = nextState;
+        } else {
+            context.actors[scopeId] = nextState;
+        }
+        // --- LENS INTEGRATION END ---
+
         return { context, tasks: [] };
     }
 
@@ -215,6 +290,8 @@ const WASM_MEMORY_LIMIT = ${WASM_MEMORY_LIMIT};
 const DEFAULT_PIPELINE_TIMEOUT_MS = ${DEFAULT_PIPELINE_TIMEOUT_MS};
 const MAX_PIPELINE_BYTES = ${MAX_PIPELINE_BYTES};
 const MAX_OUTPUT_BYTES = ${MAX_OUTPUT_BYTES};
+
+${OPTICS_SOURCE}
 
 const KERNEL_SOURCE = ${JSON.stringify(KERNEL_SOURCE)};
 
@@ -925,11 +1002,25 @@ self.onmessage = async (e) => {
                traces.push(trace);
                
                if (trace.status === 'success') {
-                   // Merge Result
+                   // Merge Result using Lenses (LSI)
+                   const focus = lensPath(task.targetKey);
+                   let targetState;
+
                    if (task.scopeId === 'root') {
-                       globalContext[task.targetKey] = output;
+                       targetState = globalContext;
                    } else {
-                       globalContext.actors[task.scopeId][task.targetKey] = output;
+                       if (!globalContext.actors) globalContext.actors = {};
+                       if (!globalContext.actors[task.scopeId]) globalContext.actors[task.scopeId] = {};
+                       targetState = globalContext.actors[task.scopeId];
+                   }
+
+                   const store = focus(targetState);
+                   const nextState = store.peek(output);
+
+                   if (task.scopeId === 'root') {
+                       globalContext = nextState;
+                   } else {
+                       globalContext.actors[task.scopeId] = nextState;
                    }
                }
            }
