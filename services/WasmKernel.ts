@@ -223,25 +223,12 @@ globalThis.dispatch = function(event, payload, scopeId) {
         const key = event.split(':')[1];
 
         // --- LENS INTEGRATION START ---
-        const focus = lensPath(key);
-        let targetState;
-
-        if (scopeId === 'root') {
-            targetState = context;
-        } else {
-            if (!context.actors) context.actors = {};
-            if (!context.actors[scopeId]) context.actors[scopeId] = {};
-            targetState = context.actors[scopeId];
-        }
-
-        const store = focus(targetState);
-        const nextState = store.peek(payload);
-
-        if (scopeId === 'root') {
-            context = nextState;
-        } else {
-            context.actors[scopeId] = nextState;
-        }
+        // Compose the full path including actors for scoped updates
+        const fullPath = scopeId === 'root' ? key : 'actors.' + scopeId + '.' + key;
+        const focus = lensPath(fullPath);
+        
+        const store = focus(context);
+        context = store.peek(payload);
         // --- LENS INTEGRATION END ---
 
         return { context, tasks: [] };
@@ -1003,25 +990,12 @@ self.onmessage = async (e) => {
                
                if (trace.status === 'success') {
                    // Merge Result using Lenses (LSI)
-                   const focus = lensPath(task.targetKey);
-                   let targetState;
-
-                   if (task.scopeId === 'root') {
-                       targetState = globalContext;
-                   } else {
-                       if (!globalContext.actors) globalContext.actors = {};
-                       if (!globalContext.actors[task.scopeId]) globalContext.actors[task.scopeId] = {};
-                       targetState = globalContext.actors[task.scopeId];
-                   }
-
-                   const store = focus(targetState);
-                   const nextState = store.peek(output);
-
-                   if (task.scopeId === 'root') {
-                       globalContext = nextState;
-                   } else {
-                       globalContext.actors[task.scopeId] = nextState;
-                   }
+                   // Compose the full path including actors for scoped updates
+                   const fullPath = task.scopeId === 'root' ? task.targetKey : 'actors.' + task.scopeId + '.' + task.targetKey;
+                   const focus = lensPath(fullPath);
+                   
+                   const store = focus(globalContext);
+                   globalContext = store.peek(output);
                }
            }
        }
