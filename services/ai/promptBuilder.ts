@@ -32,7 +32,11 @@ import { PromptOptions } from './types';
 export function buildOperatorSection(options?: PromptOptions): string {
   const bridge = new SerenaBridge();
   
-  if (options?.selectedOperators && options.selectedOperators.length > 0) {
+  if (options?.featuredOperators && options.featuredOperators.length > 0) {
+    // Hybrid mode: featured operators with full specs, rest abbreviated
+    // This provides structural examples while saving tokens
+    return bridge.buildHybridPrompt(options.featuredOperators);
+  } else if (options?.selectedOperators && options.selectedOperators.length > 0) {
     // Phase 2: Full specs for selected operators only
     return bridge.buildSpecsPrompt(options.selectedOperators);
   } else if (options?.useMenu) {
@@ -240,6 +244,18 @@ STRUCTURE:
   ]
 }
 
+CRITICAL RULES FOR testVectors:
+1. "event" MUST be an event that EXISTS in your machine.states[someState].on
+2. DO NOT invent events - only use events you defined in the machine
+3. "initialState" (if provided) MUST be a state that EXISTS in machine.states
+4. "expectState" MUST be a state that EXISTS in machine.states
+5. Look at your machine definition and ONLY use the event names you see there
+
+VALIDATION SEQUENCE:
+- Host looks up machine.states[currentState].on[event]
+- If event doesn't exist in that state, the test FAILS
+- If you use an event like "NOOP" that doesn't exist, the test FAILS
+
 RULES:
 - expectContextKeys MUST match what the actions actually modify
 - RUN:pipeline:outputKey → modifies "outputKey"
@@ -252,11 +268,13 @@ EXAMPLE:
 "testVectors": [
   {
     "name": "Adding a task updates the list",
+    "initialState": "idle",
     "steps": [
       { "event": "ADD_TASK", "expectState": "idle", "expectContextKeys": ["tasks", "newTaskText"] }
     ]
   }
 ]
+// NOTE: "ADD_TASK" event MUST exist in machine.states.idle.on above
 
 ${buildOperatorSection(options)}
 
@@ -308,6 +326,7 @@ COMPLETE EXAMPLE: Image Processor
   "testVectors": [
     {
       "name": "Process updates output",
+      "initialState": "idle",
       "steps": [
         { "event": "APPLY", "expectState": "idle", "expectContextKeys": ["processedImage"] }
       ]

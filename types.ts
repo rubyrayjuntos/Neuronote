@@ -162,7 +162,7 @@ export interface AppDefinition {
 // ... (Rest of types: TestVector, CheckResult, VerificationReport, etc.)
 export interface TestVector {
   name: string;
-  initialState: string;
+  initialState?: string; // Defaults to machine.initial if not provided
   steps: {
     event: string;
     payload?: unknown;

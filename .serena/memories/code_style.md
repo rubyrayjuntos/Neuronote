@@ -15,7 +15,7 @@
 ## React
 - Functional components with hooks
 - useEffect for side effects
-- useState for local state
+- Zustand store for global state (see stores/appStore.ts)
 - Props destructured in function signature
 
 ## File Organization

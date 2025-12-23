@@ -3,7 +3,7 @@
 When completing a task in NeuroNote, ensure:
 
 ## Before Committing
-- [ ] `npm test` passes (257/257 tests expected)
+- [ ] ``npm test` passes (314/314 tests expected)
 - [ ] `npx tsc --noEmit` has no type errors
 - [ ] New operators added to `operators/registry.ts`
 - [ ] Worker implementations in `services/WasmKernel.ts` for Tier 2 ops

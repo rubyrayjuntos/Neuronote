@@ -2,33 +2,13 @@ import { GoogleGenAI } from "@google/genai";
 import { AppDefinition } from "../../types";
 import { AIProvider, AIProviderConfig, AIProviderWithCapabilities, ExecutionFeedback, ModelCapabilities, PromptOptions } from "./types";
 import { buildOperatorSection } from "./promptBuilder";
+import { isAppDefinition, validateAppDefinition, formatZodErrors, repairProposal, buildRepairFeedback } from "../../schemas";
 
 /**
  * Validates that a parsed object has the minimum required shape of an AppDefinition.
- * This is a runtime guard since AI output cannot be trusted.
+ * Uses Zod schema validation for comprehensive type checking.
  */
-function validateAppDefinitionShape(obj: unknown): obj is AppDefinition {
-  if (!obj || typeof obj !== 'object') return false;
-  const def = obj as Record<string, unknown>;
-  
-  // Required fields
-  if (typeof def.version !== 'string') return false;
-  if (!def.initialContext || typeof def.initialContext !== 'object') return false;
-  if (!def.machine || typeof def.machine !== 'object') return false;
-  if (!def.view || typeof def.view !== 'object') return false;
-  
-  // Machine must have initial state and states object
-  const machine = def.machine as Record<string, unknown>;
-  if (typeof machine.initial !== 'string') return false;
-  if (!machine.states || typeof machine.states !== 'object') return false;
-  
-  // View must have id and type
-  const view = def.view as Record<string, unknown>;
-  if (typeof view.id !== 'string') return false;
-  if (typeof view.type !== 'string') return false;
-  
-  return true;
-}
+const validateAppDefinitionShape = isAppDefinition;
 
 /**
  * JSON Schema for AppDefinition - used by AI to ensure correct output format.
@@ -261,6 +241,7 @@ export class GeminiProvider implements AIProviderWithCapabilities {
     prompt: string,
     feedback?: ExecutionFeedback | null
   ): Promise<AppDefinition> {
+    // Use full operator docs - abbreviated menu doesn't provide enough structural context
     const systemInstruction = buildSystemPrompt(currentDef, feedback, this.systemPromptAdditions);
 
     // Simple user prompt with delimiter (matching the format in system prompt example)
@@ -285,6 +266,15 @@ ${prompt}
         throw new Error("AI returned empty response");
       }
       
+      // Log token usage if available
+      if (response.usageMetadata) {
+        console.log('[GEMINI] 📊 Token Usage:', {
+          prompt_tokens: response.usageMetadata.promptTokenCount,
+          completion_tokens: response.usageMetadata.candidatesTokenCount,
+          total_tokens: response.usageMetadata.totalTokenCount
+        });
+      }
+      
       console.log('[GEMINI] Response received, length:', response.text.length);
       
       // Parse with error handling
@@ -296,14 +286,31 @@ ${prompt}
         throw new Error(`AI returned invalid JSON: ${parseError instanceof Error ? parseError.message : 'Parse failed'}`);
       }
       
-      // Validate shape
-      if (!validateAppDefinitionShape(parsed)) {
-        console.error('[GEMINI] Shape validation failed:', parsed);
+      // REPAIR PHASE: Fix common AI mistakes before validation
+      const repairResult = repairProposal(parsed);
+      if (repairResult.repaired) {
+        console.log('[GEMINI] 🔧 Applied auto-repairs:', repairResult.fixes);
+        parsed = repairResult.proposal;
+      }
+
+      // VALIDATION PHASE: Now validate with Zod
+      const validationResult = validateAppDefinition(parsed);
+      if (!validationResult.success) {
+        console.error('[GEMINI] Zod validation failed after repair attempt');
+        console.error('[GEMINI] Zod errors:', formatZodErrors(validationResult.error));
+        
+        // Build feedback for potential self-correction retry
+        const feedbackMsg = buildRepairFeedback(
+          validationResult.error.issues,
+          repairResult.fixes
+        );
+        console.error('[GEMINI] AI Feedback:\n', feedbackMsg);
+        
         throw new Error("AI response missing required fields (version, initialContext, machine, view)");
       }
       
-      console.log('[GEMINI] Proposal validated successfully');
-      return parsed;
+      console.log('[GEMINI] ✅ Proposal validated successfully');
+      return parsed as AppDefinition;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error("Gemini Generation Error:", message);

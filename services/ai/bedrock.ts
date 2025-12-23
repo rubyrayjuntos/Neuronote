@@ -8,6 +8,7 @@ import {
   ProviderType 
 } from "./types";
 import { buildSystemPrompt } from "./gemini";
+import { isAppDefinition, validateAppDefinition, formatZodErrors, repairProposal, buildRepairFeedback } from "../../schemas";
 
 /**
  * AWS Bedrock configuration.
@@ -115,26 +116,9 @@ Respond with ONLY the JSON AppDefinition, no explanations.<|eot_id|><|start_head
 
 /**
  * Validates that a parsed object has the minimum required shape of an AppDefinition.
+ * Uses Zod schema validation for comprehensive type checking.
  */
-function validateAppDefinitionShape(obj: unknown): obj is AppDefinition {
-  if (!obj || typeof obj !== 'object') return false;
-  const def = obj as Record<string, unknown>;
-  
-  if (typeof def.version !== 'string') return false;
-  if (!def.initialContext || typeof def.initialContext !== 'object') return false;
-  if (!def.machine || typeof def.machine !== 'object') return false;
-  if (!def.view || typeof def.view !== 'object') return false;
-  
-  const machine = def.machine as Record<string, unknown>;
-  if (typeof machine.initial !== 'string') return false;
-  if (!machine.states || typeof machine.states !== 'object') return false;
-  
-  const view = def.view as Record<string, unknown>;
-  if (typeof view.id !== 'string') return false;
-  if (typeof view.type !== 'string') return false;
-  
-  return true;
-}
+const validateAppDefinitionShape = isAppDefinition;
 
 /**
  * Extract JSON from potentially markdown-wrapped response.
@@ -197,6 +181,7 @@ export class BedrockProvider implements AIProviderWithCapabilities {
     prompt: string,
     feedback?: ExecutionFeedback | null
   ): Promise<AppDefinition> {
+    // Use full operator docs - abbreviated menu doesn't provide enough structural context
     const systemPrompt = buildSystemPrompt(currentDef, feedback, this.systemPromptAdditions);
     
     // Simple user prompt with delimiter (matching system prompt format)
@@ -223,6 +208,19 @@ ${prompt}
       
       const rawText = this.modelConfig.parseResponse(responseBody);
       console.log('[BEDROCK] Full extracted text length:', rawText.length);
+      
+      // Log token usage if available (Claude returns this in response)
+      if (responseBody && typeof responseBody === 'object' && 'usage' in responseBody) {
+        const usage = (responseBody as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
+        if (usage) {
+          console.log('[BEDROCK] 📊 Token Usage:', {
+            prompt_tokens: usage.input_tokens,
+            completion_tokens: usage.output_tokens,
+            total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0)
+          });
+        }
+      }
+      
       console.log('[BEDROCK] Extracted text (first 1000 chars):', rawText.substring(0, 1000));
       console.log('[BEDROCK] Extracted text (last 500 chars):', rawText.substring(rawText.length - 500));
       
@@ -238,13 +236,32 @@ ${prompt}
         throw new Error(`AI returned invalid JSON: ${parseError instanceof Error ? parseError.message : 'Parse failed'}`);
       }
 
-      // Validate shape
-      if (!validateAppDefinitionShape(parsed)) {
-        console.error('[BEDROCK] Shape validation failed:', parsed);
+      // REPAIR PHASE: Fix common AI mistakes before validation
+      const repairResult = repairProposal(parsed);
+      if (repairResult.repaired) {
+        console.log('[BEDROCK] 🔧 Applied auto-repairs:', repairResult.fixes);
+        parsed = repairResult.proposal;
+      }
+
+      // VALIDATION PHASE: Now validate with Zod
+      const validationResult = validateAppDefinition(parsed);
+      if (!validationResult.success) {
+        console.error('[BEDROCK] Zod validation failed after repair attempt');
+        console.error('[BEDROCK] Zod errors:', formatZodErrors(validationResult.error));
+        
+        // Build feedback for potential self-correction retry
+        const feedbackMsg = buildRepairFeedback(
+          validationResult.error.issues,
+          repairResult.fixes
+        );
+        console.error('[BEDROCK] AI Feedback:\n', feedbackMsg);
+        
         throw new Error("AI response missing required fields (version, initialContext, machine, view)");
       }
 
-      return parsed;
+      console.log('[BEDROCK] ✅ Proposal validated successfully');
+
+      return parsed as AppDefinition;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error(`Bedrock (${this.name}) Generation Error:`, message);

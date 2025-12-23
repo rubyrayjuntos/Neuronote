@@ -139,4 +139,9 @@ export interface PromptOptions {
   selectedOperators?: string[];
   /** Relevant categories to filter operators */
   categories?: string[];
+  /** 
+   * Hybrid mode: featured operators get full specs, rest get abbreviated menu.
+   * Provides structural examples while saving tokens.
+   */
+  featuredOperators?: string[];
 }

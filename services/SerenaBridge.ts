@@ -44,6 +44,8 @@ export interface SerenaBridgeConfig {
   includeTiers?: boolean;
   /** Include examples in full specs */
   includeExamples?: boolean;
+  /** Operators to show with full specs (hybrid mode) */
+  featuredOperators?: string[];
 }
 
 /**
@@ -345,6 +347,47 @@ Please choose from the menu only.`;
     // Return full specs for all operators (legacy behavior)
     const allIds = Object.keys(OPERATOR_REGISTRY);
     return this.buildSpecsPrompt(allIds);
+  }
+
+  /**
+   * Build a HYBRID prompt: featured operators with full specs, rest abbreviated.
+   * This provides structural examples while saving tokens.
+   * 
+   * @param featuredIds - Operators to show with full specs (provide structural examples)
+   * @returns Formatted hybrid prompt
+   */
+  buildHybridPrompt(featuredIds: string[]): string {
+    const allMenu = generateMenu(OPERATOR_REGISTRY);
+    const featuredSet = new Set(featuredIds);
+    
+    // Split into featured (full specs) and rest (menu only)
+    const featuredMenu = allMenu.filter(m => featuredSet.has(m.op));
+    const restMenu = allMenu.filter(m => !featuredSet.has(m.op));
+    
+    // Get full specs for featured operators
+    const featuredSpecs = this.getFullSpecs(featuredIds);
+    
+    // Format the rest as abbreviated menu
+    const restFormatted = this.formatMenuEntries(restMenu);
+    
+    return `<<<OPERATOR_REFERENCE>>>
+
+═══════════════════════════════════════════════════════════════════
+FEATURED OPERATORS (Full Specifications)
+═══════════════════════════════════════════════════════════════════
+These operators are shown with full details. Use them as FORMAT EXAMPLES
+when using any other operator from the menu below.
+
+${featuredSpecs.formatted}
+
+═══════════════════════════════════════════════════════════════════
+ALL OTHER OPERATORS (Abbreviated)
+═══════════════════════════════════════════════════════════════════
+Use the same input/output patterns as the featured operators above.
+
+${restFormatted}
+
+<<<END_OPERATOR_REFERENCE>>>`;
   }
 }
 

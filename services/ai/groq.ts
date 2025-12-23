@@ -7,6 +7,7 @@ import {
   ModelCapabilities 
 } from "./types";
 import { buildCapabilityPrompt, buildUserPrompt } from "./promptBuilder";
+import { isAppDefinition, validateAppDefinition, formatZodErrors, repairProposal, buildRepairFeedback } from "../../schemas";
 
 /**
  * Groq API configuration.
@@ -45,29 +46,11 @@ const GROQ_MODELS = {
   },
 };
 
-
 /**
  * Validates that a parsed object has the minimum required shape of an AppDefinition.
+ * Uses Zod schema validation for comprehensive type checking.
  */
-function validateAppDefinitionShape(obj: unknown): obj is AppDefinition {
-  if (!obj || typeof obj !== 'object') return false;
-  const def = obj as Record<string, unknown>;
-  
-  if (typeof def.version !== 'string') return false;
-  if (!def.initialContext || typeof def.initialContext !== 'object') return false;
-  if (!def.machine || typeof def.machine !== 'object') return false;
-  if (!def.view || typeof def.view !== 'object') return false;
-  
-  const machine = def.machine as Record<string, unknown>;
-  if (typeof machine.initial !== 'string') return false;
-  if (!machine.states || typeof machine.states !== 'object') return false;
-  
-  const view = def.view as Record<string, unknown>;
-  if (typeof view.id !== 'string') return false;
-  if (typeof view.type !== 'string') return false;
-  
-  return true;
-}
+const validateAppDefinitionShape = isAppDefinition;
 
 /**
  * Extract JSON from potentially markdown-wrapped response.
@@ -165,7 +148,7 @@ export class GroqProvider implements AIProviderWithCapabilities {
     prompt: string,
     feedback?: ExecutionFeedback | null
   ): Promise<AppDefinition> {
-    // Use the new manifest-driven prompt builder
+    // Use full operator docs - hybrid mode still causing issues with casing
     const systemPrompt = buildCapabilityPrompt();
     
     // Build user prompt with current def, request, and any feedback
@@ -207,6 +190,16 @@ export class GroqProvider implements AIProviderWithCapabilities {
       }
 
       const data = await response.json();
+      
+      // Log token usage
+      if (data.usage) {
+        console.log('[GROQ] 📊 Token Usage:', {
+          prompt_tokens: data.usage.prompt_tokens,
+          completion_tokens: data.usage.completion_tokens,
+          total_tokens: data.usage.total_tokens
+        });
+      }
+      
       const rawText = data.choices?.[0]?.message?.content;
       if (!rawText) {
         throw new Error("Empty response from Groq");
@@ -229,13 +222,31 @@ export class GroqProvider implements AIProviderWithCapabilities {
         throw new Error(`AI returned invalid JSON: ${parseError instanceof Error ? parseError.message : 'Parse failed'}`);
       }
 
-      if (!validateAppDefinitionShape(parsed)) {
-        console.error('[GROQ] Shape validation failed:', parsed);
+      // REPAIR PHASE: Fix common AI mistakes before validation
+      const repairResult = repairProposal(parsed);
+      if (repairResult.repaired) {
+        console.log('[GROQ] 🔧 Applied auto-repairs:', repairResult.fixes);
+        parsed = repairResult.proposal;
+      }
+
+      // VALIDATION PHASE: Now validate with Zod
+      const validationResult = validateAppDefinition(parsed);
+      if (!validationResult.success) {
+        console.error('[GROQ] Zod validation failed after repair attempt');
+        console.error('[GROQ] Zod errors:', formatZodErrors(validationResult.error));
+        
+        // Build feedback for potential self-correction retry
+        const feedbackMsg = buildRepairFeedback(
+          validationResult.error.issues,
+          repairResult.fixes
+        );
+        console.error('[GROQ] AI Feedback:\n', feedbackMsg);
+        
         throw new Error("AI response missing required fields (version, initialContext, machine, view)");
       }
 
-      console.log('[GROQ] Proposal validated successfully');
-      return parsed;
+      console.log('[GROQ] ✅ Proposal validated successfully');
+      return parsed as AppDefinition;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error(`Groq Generation Error:`, message);

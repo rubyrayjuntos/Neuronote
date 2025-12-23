@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useRef, useEffect, useCallback, useMemo } from 'react';
 import { createProvider, extractExecutionFeedback, AIProvider, ProviderType, AVAILABLE_PROVIDERS } from './services/ai';
 import { Persistence } from './services/persistence';
 import { ObservabilityService } from './services/observability';
@@ -14,6 +14,7 @@ import { migrateContext, salvageContext, verifyLensLaws } from './utils/migratio
 import { runHonestyOracle, formatHonestyReport } from './utils/honestyOracle';
 import { useDebounce } from './utils/hooks';
 import { Terminal, Cpu, ShieldCheck, Activity, BrainCircuit, RefreshCw, AlertTriangle, CheckCircle, XCircle, Microscope, GitCommit, Database, Eye } from 'lucide-react';
+import { useAppStore } from './stores';
 
 import { buildSystemPrompt } from './services/ai/gemini';
 
@@ -49,34 +50,40 @@ const getInitialProvider = (): AIProvider => {
 };
 
 export default function App() {
-  const [appDef, setAppDef] = useState<AppDefinition>(INITIAL_APP);
-  const [context, setContext] = useState<AppContext>(INITIAL_APP.initialContext);
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [manifest, setManifest] = useState<any | null>(null);
+  // ============================================================================
+  // ZUSTAND STORE - Centralized State Management
+  // ============================================================================
+  const appDef = useAppStore(state => state.appDef);
+  const context = useAppStore(state => state.context);
+  const isLoaded = useAppStore(state => state.isLoaded);
+  const manifest = useAppStore(state => state.manifest);
+  const prompt = useAppStore(state => state.prompt);
+  const isSynthesizing = useAppStore(state => state.isSynthesizing);
+  const logs = useAppStore(state => state.logs);
+  const error = useAppStore(state => state.error);
+  const verificationReport = useAppStore(state => state.verificationReport);
+  const aiProvider = useAppStore(state => state.aiProvider);
+  const viewMode = useAppStore(state => state.viewMode);
+  const changeHistory = useAppStore(state => state.changeHistory);
+  const interactions = useAppStore(state => state.interactions);
   
-  const [prompt, setPrompt] = useState('');
-  const [isSynthesizing, setIsSynthesizing] = useState(false);
-  const [logs, setLogs] = useState<SystemLog[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [verificationReport, setVerificationReport] = useState<VerificationReport | null>(null);
-
-  // AI Provider State - allows runtime provider switching
-  const [aiProvider, setAiProvider] = useState<AIProvider>(getInitialProvider);
-
-  // 9. Observability State
-  const [viewMode, setViewMode] = useState<'control' | 'lab' | 'flow'>('control');
-  const [changeHistory, setChangeHistory] = useState<ChangeRecord[]>([]);
-  const [interactions, setInteractions] = useState<InteractionTrace[]>([]);
+  // Actions from store
+  const setAppDef = useAppStore(state => state.setAppDef);
+  const setContext = useAppStore(state => state.setContext);
+  const setLoaded = useAppStore(state => state.setLoaded);
+  const setManifest = useAppStore(state => state.setManifest);
+  const setPrompt = useAppStore(state => state.setPrompt);
+  const setIsSynthesizing = useAppStore(state => state.setIsSynthesizing);
+  const setError = useAppStore(state => state.setError);
+  const setVerificationReport = useAppStore(state => state.setVerificationReport);
+  const setAiProvider = useAppStore(state => state.setAiProvider);
+  const setViewMode = useAppStore(state => state.setViewMode);
+  const setChangeHistory = useAppStore(state => state.setChangeHistory);
+  const addLog = useAppStore(state => state.addLog);
+  const addChangeRecord = useAppStore(state => state.addChangeRecord);
+  const recordInteraction = useAppStore(state => state.recordInteraction);
   
   const logsEndRef = useRef<HTMLDivElement>(null);
-
-  const addLog = useCallback((log: SystemLog) => {
-    setLogs(prev => [...prev.slice(-(MAX_LOG_ENTRIES - 1)), log]);
-  }, []);
-
-  const recordInteraction = useCallback((trace: InteractionTrace) => {
-      setInteractions(prev => [...prev.slice(-(MAX_INTERACTION_TRACES - 1)), trace]);
-  }, []);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -122,8 +129,11 @@ export default function App() {
           addLog({ id: generateUUID(), timestamp: Date.now(), source: 'STORAGE', type: 'INFO', message: `Loaded ${journal.length} records from Change Journal.` });
       }
 
-      setIsLoaded(true);
-  }, [addLog]);
+      // 3. Initialize AI Provider
+      setAiProvider(getInitialProvider());
+
+      setLoaded(true);
+  }, [addLog, setAppDef, setContext, setChangeHistory, setLoaded, setManifest, setError, setAiProvider]);
 
   // Debounced save functions to avoid excessive writes
   const debouncedSaveSnapshot = useDebounce(
@@ -154,34 +164,29 @@ export default function App() {
   const handleRuntimeError = useCallback((error: Error) => {
       addLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'ERROR', message: `CRITICAL: ${error.message}` });
       
-      setChangeHistory(prev => {
-          if (prev.length === 0) return prev;
+      // Get current state directly from store for atomic rollback
+      const currentHistory = useAppStore.getState().changeHistory;
+      const currentContext = useAppStore.getState().context;
+      
+      if (currentHistory.length === 0) return;
+      
+      const latest = currentHistory[0];
+      // Only rollback if it was just accepted and we haven't already rolled back
+      if (latest.status === 'accepted') {
+          addLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'WARN', message: `Automatic Rollback to v${latest.oldDef.version}` });
           
-          const latest = prev[0];
-          // Only rollback if it was just accepted and we haven't already rolled back
-          if (latest.status === 'accepted') {
-              // Update the record to reflect failure
-              const updatedRecord: ChangeRecord = { 
-                  ...latest, 
-                  status: 'rolled_back', 
-                  failureReason: error.message 
-              };
-              
-              addLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'WARN', message: `Automatic Rollback to v${latest.oldDef.version}` });
-              
-              // Perform State Revert
-              setAppDef(latest.oldDef);
-              
-              // RECOVERY LENS: Salvage data from the broken context back into the old schema
-              // This uses the Lens.put() operation
-              const salvagedContext = salvageContext(context, latest.oldDef);
-              setContext(salvagedContext);
-              
-              return [updatedRecord, ...prev.slice(1)];
-          }
-          return prev;
-      });
-  }, [context, addLog]); // Context dependency ensures we have latest data for migration
+          // RECOVERY LENS: Salvage data from the broken context back into the old schema
+          const salvagedContext = salvageContext(currentContext, latest.oldDef);
+          
+          // Use store's atomic rollback action
+          useAppStore.getState().rollback(
+              latest.oldDef,
+              salvagedContext,
+              latest.id,
+              error.message
+          );
+      }
+  }, [addLog]); // No need for context dependency - accessing store directly
 
   // ============================================================================
   // SIMULATION MODE - Shows every step of the AI flow without calling the API
@@ -358,6 +363,10 @@ export default function App() {
 
   const handleSynthesize = async () => {
     if (!prompt.trim()) return;
+    if (!aiProvider) {
+      setError('AI provider not initialized');
+      return;
+    }
     
     setIsSynthesizing(true);
     setError(null);
@@ -548,7 +557,7 @@ export default function App() {
           : 'Critical Verification Failure.';
           
         setError(`Proposal Rejected: ${topFailure}`);
-        setChangeHistory(prev => [record, ...prev]);
+        addChangeRecord(record);
         
         // Complete trace as rejected
         ObservabilityService.rejectTrace(topFailure);
@@ -570,7 +579,7 @@ export default function App() {
         setPrompt('');
         addLog({ id: generateUUID(), timestamp: Date.now(), source: 'HOST', type: 'SUCCESS', message: `Migrated to v${proposal.version}. Preserved ${migrationResult.stats.preserved} keys.` });
         
-        setChangeHistory(prev => [record, ...prev]);
+        addChangeRecord(record);
         
         // Complete trace as success
         ObservabilityService.completeTrace(proposal.version);
@@ -647,8 +656,7 @@ export default function App() {
         <main className="flex-1 p-8 overflow-y-auto relative">
            <HostRuntime 
              definition={appDef} 
-             context={context} 
-             setContext={setContext}
+             context={context}
              onLog={addLog}
              onInteraction={recordInteraction}
              onRuntimeError={handleRuntimeError}

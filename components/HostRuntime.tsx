@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef, ReactNode, ErrorInfo, Component } from 'react';
 import { AppDefinition, ViewNode, AppContext, SystemLog, InteractionTrace } from '../types';
 import { WasmKernel } from '../services/WasmKernel';
+import { useAppStore } from '../stores/appStore';
+import { verifyLensLaws } from '../utils/migration';
 import * as Icons from 'lucide-react';
 
 // UUID helper that works in all environments (including non-HTTPS)
@@ -18,7 +20,6 @@ const generateUUID = (): string => {
 interface HostRuntimeProps {
   definition: AppDefinition;
   context: AppContext;
-  setContext: React.Dispatch<React.SetStateAction<AppContext>>;
   onLog: (log: SystemLog) => void;
   onInteraction: (trace: InteractionTrace) => void;
   onRuntimeError?: (error: Error) => void;
@@ -262,7 +263,10 @@ const TooltipPrimitive: React.FC<TooltipPrimitiveProps> = ({ content, children, 
 };
 
 
-export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, setContext, onLog, onInteraction, onRuntimeError }) => {
+export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, onLog, onInteraction, onRuntimeError }) => {
+  // Get setContext directly from Zustand store (removes prop drilling)
+  const setContext = useAppStore(state => state.setContext);
+  
   const kernelRef = useRef<WasmKernel | null>(null);
   const [isKernelReady, setIsKernelReady] = useState(false);
   const [governanceError, setGovernanceError] = useState<string | null>(null);
@@ -348,9 +352,27 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
 
     try {
         const start = performance.now();
+        const prevContext = context; // Capture for lens verification
+        
         // Updated to handle return type { context, traces }
         const result = await kernelRef.current.dispatch(event, payload, scopeId);
         const end = performance.now();
+        
+        // Full Lens Law Verification for context updates
+        // Uses the same verifyLensLaws as proposal acceptance - no weakened version
+        if (event.startsWith('UPDATE_CONTEXT:')) {
+            const lensCheck = verifyLensLaws(prevContext, definition);
+            
+            if (!lensCheck.satisfied) {
+                onLog({ 
+                    id: generateUUID(), 
+                    timestamp: Date.now(), 
+                    source: 'LENS', 
+                    type: 'WARN', 
+                    message: `⚠️ Lens Law Violation: ${lensCheck.violation}` 
+                });
+            }
+        }
         
         setContext(result.context);
         
@@ -374,7 +396,7 @@ export const HostRuntime: React.FC<HostRuntimeProps> = ({ definition, context, s
              restartKernel(); 
         }
     }
-  }, [isKernelReady, onLog, setContext, restartKernel]);
+  }, [context, isKernelReady, onLog, setContext, restartKernel]);
 
   useEffect(() => {
       const pulseInterval = definition.machine.pulse;

@@ -873,8 +873,6 @@ function executeTestVectors(proposal: AppDefinition, results: CheckResult[]) {
 
         }
 
-
-
         const stateDef = proposal.machine.states[currentState];
 
         if (!stateDef || !stateDef.on || !stateDef.on[step.event]) {
