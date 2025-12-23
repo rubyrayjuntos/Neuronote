@@ -288,10 +288,15 @@ globalThis.dispatch = function(event, payload, scopeId) {
         const key = event.split(':')[1];
 
         // --- LENS INTEGRATION START ---
-        // Compose the full path including actors for scoped updates
-        const fullPath = buildLensPath(scopeId, key);
+        // Build lens path immutably - include actors scope in path
+        let fullPath;
+        if (scopeId === 'root') {
+            fullPath = key;
+        } else {
+            fullPath = `actors.${scopeId}${key ? '.' + key : ''}`;
+        }
+
         const focus = lensPath(fullPath);
-        
         const store = focus(context);
         context = store.peek(payload);
         // --- LENS INTEGRATION END ---
@@ -1062,11 +1067,15 @@ self.onmessage = async (e) => {
                traces.push(trace);
                
                if (trace.status === 'success') {
-                   // Merge Result using Lenses (LSI)
-                   // Compose the full path including actors for scoped updates
-                   const fullPath = buildLensPath(task.scopeId, task.targetKey);
+                   // Merge Result using Lenses (LSI) - immutably
+                   let fullPath;
+                   if (task.scopeId === 'root') {
+                       fullPath = task.targetKey;
+                   } else {
+                       fullPath = `actors.${task.scopeId}${task.targetKey ? '.' + task.targetKey : ''}`;
+                   }
+
                    const focus = lensPath(fullPath);
-                   
                    const store = focus(globalContext);
                    globalContext = store.peek(output);
                }
