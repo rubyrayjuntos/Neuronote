@@ -72,7 +72,33 @@ const lensPath = (path) => {
  * @returns {string} The full lens path
  */
 const buildLensPath = (scopeId, key) => {
+    if (!key) return null;
     return scopeId === 'root' ? key : 'actors.' + scopeId + '.' + key;
+};
+
+/**
+ * Merge Lens: Immutably merge newData into existing object
+ * @param {Object} state - Current state object
+ * @param {Object} newData - Data to merge in
+ * @returns {Object} New object with merged data
+ */
+const mergeLens = (state, newData) => {
+    if (!newData || typeof newData !== 'object') return state;
+    const base = state ?? {};
+    return { ...base, ...newData };
+};
+
+/**
+ * Delete Lens: Immutably remove a key from an object
+ * @param {Object} state - Current state object
+ * @param {string} key - Key to remove
+ * @returns {Object} New object without the key
+ */
+const deleteLens = (state, key) => {
+    if (!state || typeof state !== 'object') return state;
+    const result = { ...state };
+    delete result[key];
+    return result;
 };
 `;
 
@@ -93,12 +119,21 @@ globalThis.boot = function(initialContext, def) {
   definition = def;
   
   if (!context._sys) {
-     context._sys = {
-       rootState: definition.machine.initial,
-       actorStates: {},
-       actorTypes: {}
-     };
-     context.actors = context.actors || {};
+      // Use lenses to immutably initialize _sys structure
+      const sysLens = lensPath('_sys');
+      const sysStore = sysLens(context);
+      context = sysStore.peek({
+        rootState: definition.machine.initial,
+        actorStates: {},
+        actorTypes: {}
+      });
+      
+      // Initialize actors if not present
+      const actorsLens = lensPath('actors');
+      const actorsStore = actorsLens(context);
+      if (!actorsStore.pos) {
+          context = actorsStore.peek({});
+      }
   }
   return context;
 };
@@ -134,10 +169,21 @@ const CAPABILITY_MANIFEST = {
              const data = getScopedData();
              const list = Array.isArray(data[listKey]) ? data[listKey] : [];
              setScopedData({ [listKey]: [...list, newId] });
-             context._sys.actorStates[newId] = definition.actors[actorType].initial;
-             context._sys.actorTypes[newId] = actorType;
-             if (!context.actors) context.actors = {};
-             context.actors[newId] = {};
+             
+             // Use lenses to immutably update _sys.actorStates
+             const actorStatesLens = lensPath('_sys.actorStates.' + newId);
+             const statesStore = actorStatesLens(context);
+             context = statesStore.peek(definition.actors[actorType].initial);
+             
+             // Use lenses to immutably update _sys.actorTypes
+             const actorTypesLens = lensPath('_sys.actorTypes.' + newId);
+             const typesStore = actorTypesLens(context);
+             context = typesStore.peek(actorType);
+             
+             // Use lenses to immutably initialize actor data
+             const actorDataLens = lensPath('actors.' + newId);
+             const dataStore = actorDataLens(context);
+             context = dataStore.peek({});
         }
     },
     APPEND: {
@@ -186,7 +232,11 @@ const CAPABILITY_MANIFEST = {
         minArgs: 0,
         exec: (args, { scopeId }) => {
             if (scopeId === 'root') throw new Error("Security: Cannot DELETE root");
-            delete context._sys.actorStates[scopeId];
+            
+            // Use deleteLens to immutably remove actor state
+            const actorStatesLens = lensPath('_sys.actorStates');
+            const statesStore = actorStatesLens(context);
+            context = statesStore.peek(deleteLens(statesStore.pos, scopeId));
         }
     },
     // NEW: TIER 2 SCHEDULING
@@ -213,11 +263,14 @@ function executeAction(actionString, scopeId, payload) {
     const getScopedData = () => scopeId === 'root' ? context : (context.actors[scopeId] || {});
     const setScopedData = (newData) => {
         if (scopeId === 'root') {
-           Object.assign(context, newData);
+            // Use mergeLens for immutable merge at root
+            context = mergeLens(context, newData);
         } else {
-           if (!context.actors) context.actors = {};
-           if (!context.actors[scopeId]) context.actors[scopeId] = {};
-           Object.assign(context.actors[scopeId], newData);
+            // Use lens to navigate to actor scope and merge
+            const actorLens = lensPath('actors.' + scopeId);
+            const actorStore = actorLens(context);
+            const merged = mergeLens(actorStore.pos, newData);
+            context = actorStore.peek(merged);
         }
     };
 
@@ -264,8 +317,16 @@ globalThis.dispatch = function(event, payload, scopeId) {
         }
         actions.forEach(act => executeAction(act, scopeId, payload));
         if (target) {
-            if (scopeId === 'root') context._sys.rootState = target;
-            else context._sys.actorStates[scopeId] = target;
+            // Use lenses to immutably update state machine state
+            if (scopeId === 'root') {
+                const rootStateLens = lensPath('_sys.rootState');
+                const rootStore = rootStateLens(context);
+                context = rootStore.peek(target);
+            } else {
+                const actorStateLens = lensPath('_sys.actorStates.' + scopeId);
+                const actorStore = actorStateLens(context);
+                context = actorStore.peek(target);
+            }
         }
     }
     
