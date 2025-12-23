@@ -228,7 +228,7 @@ globalThis.dispatch = function(event, payload, scopeId) {
         if (scopeId === 'root') {
             fullPath = key;
         } else {
-            fullPath = 'actors.' + scopeId + (key ? '.' + key : '');
+            fullPath = `actors.${scopeId}${key ? '.' + key : ''}`;
         }
 
         const focus = lensPath(fullPath);
@@ -999,7 +999,7 @@ self.onmessage = async (e) => {
                    if (task.scopeId === 'root') {
                        fullPath = task.targetKey;
                    } else {
-                       fullPath = 'actors.' + task.scopeId + (task.targetKey ? '.' + task.targetKey : '');
+                       fullPath = `actors.${task.scopeId}${task.targetKey ? '.' + task.targetKey : ''}`;
                    }
 
                    const focus = lensPath(fullPath);
