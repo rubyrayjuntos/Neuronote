@@ -223,25 +223,17 @@ globalThis.dispatch = function(event, payload, scopeId) {
         const key = event.split(':')[1];
 
         // --- LENS INTEGRATION START ---
-        const focus = lensPath(key);
-        let targetState;
-
+        // Build lens path immutably - include actors scope in path
+        let fullPath;
         if (scopeId === 'root') {
-            targetState = context;
+            fullPath = key;
         } else {
-            if (!context.actors) context.actors = {};
-            if (!context.actors[scopeId]) context.actors[scopeId] = {};
-            targetState = context.actors[scopeId];
+            fullPath = 'actors.' + scopeId + (key ? '.' + key : '');
         }
 
-        const store = focus(targetState);
-        const nextState = store.peek(payload);
-
-        if (scopeId === 'root') {
-            context = nextState;
-        } else {
-            context.actors[scopeId] = nextState;
-        }
+        const focus = lensPath(fullPath);
+        const store = focus(context);
+        context = store.peek(payload);
         // --- LENS INTEGRATION END ---
 
         return { context, tasks: [] };
@@ -1002,26 +994,17 @@ self.onmessage = async (e) => {
                traces.push(trace);
                
                if (trace.status === 'success') {
-                   // Merge Result using Lenses (LSI)
-                   const focus = lensPath(task.targetKey);
-                   let targetState;
-
+                   // Merge Result using Lenses (LSI) - immutably
+                   let fullPath;
                    if (task.scopeId === 'root') {
-                       targetState = globalContext;
+                       fullPath = task.targetKey;
                    } else {
-                       if (!globalContext.actors) globalContext.actors = {};
-                       if (!globalContext.actors[task.scopeId]) globalContext.actors[task.scopeId] = {};
-                       targetState = globalContext.actors[task.scopeId];
+                       fullPath = 'actors.' + task.scopeId + (task.targetKey ? '.' + task.targetKey : '');
                    }
 
-                   const store = focus(targetState);
-                   const nextState = store.peek(output);
-
-                   if (task.scopeId === 'root') {
-                       globalContext = nextState;
-                   } else {
-                       globalContext.actors[task.scopeId] = nextState;
-                   }
+                   const focus = lensPath(fullPath);
+                   const store = focus(globalContext);
+                   globalContext = store.peek(output);
                }
            }
        }
