@@ -12,7 +12,7 @@ import { generateTier1OperatorsSource } from "../operators";
 
 const OPTICS_SOURCE = `
 // --- TRUE LENS IMPLEMENTATION (LSI) ---
-// See standard literature on functional lenses/optics for theoretical background.
+// See types/optics.ts for theoretical background.
 
 /**
  * THE STORE COMONAD
@@ -34,8 +34,8 @@ const prop = (k) => (s) => Store(
             copy[k] = v;
             return copy;
         }
-        // Handle null/undefined state by creating object
-        const base = s ?? {};
+        // Handle undefined state by creating object
+        const base = s || {};
         return { ...base, [k]: v };
     }
 );
