@@ -6,6 +6,9 @@ NeuroNote implements a **Host–Guest dual-kernel architecture** for safe runtim
 
 ```
 User Prompt → AI (Guest) → AppDefinition (IR) → Gatekeeper → Host Runtime
+                              │                    │              │
+                              │                    │              ├── QuickJS WASM (Tier 1)
+                              │                    │              └── Locked Worker (Tier 2)
                               │                    │
                               │                    ├── Zod schema validation
                               │                    ├── Semantic verification
@@ -14,14 +17,27 @@ User Prompt → AI (Guest) → AppDefinition (IR) → Gatekeeper → Host Runtim
                               └── Declarative JSON schema (never raw code)
 ```
 
+## Security Model: Governance by Topology
+
+AI danger is in **COMPOSITION**, not **INVOCATION**. The AI cannot inject code—it can only reference operators by name ("ordering off the menu").
+
+| Tier | Execution Environment | Security Properties |
+|------|----------------------|---------------------|
+| **Tier 1** (33 ops) | QuickJS WASM sandbox | Fuel-metered, no network, no DOM, memory-limited (32MB) |
+| **Tier 2** (13 ops) | Network-locked Worker | fetch/WebSocket/XHR blocked, no importScripts, no indexedDB |
+
+Tier 2 operators are **Host-Managed Accelerators**—trusted Host primitives that the AI invokes by name but cannot modify.
+
 ### Key Components
 
 | Layer | Location | Purpose |
 |-------|----------|---------|
 | **Schemas** | `schemas/index.ts` | Zod schemas + `repairProposal()` for AI output normalization |
-| **Store** | `stores/appStore.ts` | Zustand + Immer state management |
+| **Store** | `stores/appStore.ts` | Zustand + Immer state management with LSI optics |
 | **AI Providers** | `services/ai/{groq,gemini,bedrock}.ts` | Model-agnostic proposal generation |
-| **Operators** | `operators/registry.ts` | 45+ pure dataflow operators (Math.*, Image.*, etc.) |
+| **SerenaBridge** | `services/SerenaBridge.ts` | Two-phase "Diner Menu" retrieval for token-efficient prompts |
+| **Operators** | `operators/registry.ts` | 46 pure dataflow operators (33 Tier 1 + 13 Tier 2) |
+| **WasmKernel** | `services/WasmKernel.ts` | Dual-kernel: QuickJS sandbox + network-locked Worker |
 | **Validator** | `utils/validator.ts` | Multi-pass verification: structure, pipelines, bindings, honesty |
 | **Runtime** | `components/HostRuntime.tsx` | Renders verified AppDefinition via component registry |
 
@@ -131,7 +147,7 @@ VITE_API_KEY=AIza...            # Google Gemini API
 ```bash
 npm run dev          # Start Vite dev server (port 3000/3001)
 npm run build        # Production build
-npx vitest run       # Run all 322 tests
+npx vitest run       # Run all tests (381 as of 2025-12-24)
 npx vitest run <file>  # Run specific test file
 ```
 
@@ -185,7 +201,7 @@ Add to `operators/registry.ts` following this pattern:
 const MyOperator: OperatorDef = {
   op: 'Category.Name',  // PascalCase
   category: 'category',
-  tier: 1,  // 1=WASM sandbox, 2=Host
+  tier: 1,  // 1=QuickJS WASM sandbox (pure/sync), 2=Locked Worker (async/heavy)
   pure: true,
   async: false,
   inputs: [{ name: 'input', type: 'number' }],
@@ -193,46 +209,103 @@ const MyOperator: OperatorDef = {
   description: 'What it does',
   impl: (inputs) => inputs.input * 2,
 };
+
+// Tier 1: Must be pure, sync, no network. Runs in QuickJS.
+// Tier 2: Can be async, heavy compute. Runs in Worker (network blocked at runtime).
 ```
 
 ## File Organization
 
 ```
 schemas/          # Zod schemas, repairProposal
-stores/           # Zustand store, selectors, actions
-services/ai/      # AI providers (groq, gemini, bedrock)
-operators/        # Dataflow operators + registry
+stores/           # Zustand store, selectors, actions, LSI optics
+services/
+  ai/             # AI providers (groq, gemini, bedrock)
+  SerenaBridge.ts # Two-phase prompt retrieval ("Diner Menu")
+  WasmKernel.ts   # Dual-kernel runtime (QuickJS + Worker)
+operators/        # 46 dataflow operators + registry + menu.ts
 utils/            # validator, honestyOracle, migration
 components/       # React components, HostRuntime
+docs/             # Architecture papers, operator docs
 ```
 
 ## SerenaBridge: Two-Phase Prompt Retrieval
 
-`services/SerenaBridge.ts` implements a token-efficient pattern for AI prompts:
+`services/SerenaBridge.ts` (423 lines, 436 lines of tests) implements the "Diner Menu" pattern:
 
 ### Phase 1: Menu Mode
-Send abbreviated operator summaries to reduce token usage:
+Send abbreviated operator summaries to reduce token usage (~90% reduction):
 ```typescript
-const menu = SerenaBridge.buildMenuPrompt();
+const bridge = new SerenaBridge();
+const menu = bridge.buildMenuPrompt();
 // Returns: "Math.Add(a,b)→number, Image.Blur(img,radius)→image, ..."
 ```
 
 ### Phase 2: Full Specs
-When AI needs details, request full specifications for specific operators:
+When AI needs details, request full specifications for selected operators:
 ```typescript
-const specs = SerenaBridge.buildSpecsPrompt(['Math.Add', 'Image.Blur']);
+const specs = bridge.buildSpecsPrompt(['Math.Add', 'Image.Blur']);
 // Returns complete input/output schemas, examples, tier info
 ```
 
-### Hybrid Mode (Experimental)
+### Hybrid Mode
 `buildHybridPrompt()` sends featured operators with full specs + menu for others:
 ```typescript
-const prompt = SerenaBridge.buildHybridPrompt({
-  featuredOperators: ['Math.Add', 'Image.Grayscale', 'Text.Template']
-});
+const prompt = bridge.buildHybridPrompt(['Math.Add', 'Image.Grayscale']);
 ```
 
-**Note**: Hybrid mode is in TODO - some AI models produce casing errors that `repairProposal()` auto-fixes.
+### Integration with AI Providers
+Use via `PromptOptions` in `services/ai/promptBuilder.ts`:
+```typescript
+import { buildCapabilityPrompt } from './promptBuilder';
+
+// Phase 1: Menu only
+buildCapabilityPrompt({ useMenu: true });
+
+// Phase 2: Full specs for selected
+buildCapabilityPrompt({ selectedOperators: ['Image.Blur', 'Audio.FFT'] });
+
+// Hybrid: Featured with full specs
+buildCapabilityPrompt({ featuredOperators: ['Math.Add'] });
+```
+
+**Note**: `repairProposal()` auto-fixes casing errors (e.g., `image.blur` → `Image.Blur`).
+## WasmKernel: Dual-Kernel Runtime
+
+`services/WasmKernel.ts` implements the actual execution sandbox:
+
+### Architecture
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      HOST RUNTIME                           │
+│  ┌─────────────────────┐    ┌─────────────────────────────┐ │
+│  │   QuickJS WASM      │    │   Web Worker (Locked)       │ │
+│  │   (Tier 1 Sandbox)  │    │   (Tier 2 Accelerators)     │ │
+│  │                     │    │                             │ │
+│  │ • 33 pure operators │    │ • 13 heavy operators        │ │
+│  │ • Fuel metering     │    │ • fetch() blocked           │ │
+│  │ • 32MB memory limit │    │ • WebSocket blocked         │ │
+│  │ • No network/DOM    │    │ • importScripts blocked     │ │
+│  │ • FSM dispatch      │    │ • indexedDB deleted         │ │
+│  └─────────────────────┘    └─────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Functions
+- `generateKernelSource()` - Dynamically builds QuickJS kernel with operators
+- `isPureTier1Pipeline()` - Checks if pipeline can run entirely in sandbox
+- `executeTier1Pipeline()` - Runs pure Tier 1 pipelines inside QuickJS
+- `dispatch(event)` - FSM event handling, returns `{ context, tasks, tier1Traces }`
+
+### Execution Flow
+1. Event dispatched → QuickJS VM
+2. FSM determines actions (context updates, pipeline runs)
+3. **Tier 1 pipelines**: Execute entirely in QuickJS, return traces
+4. **Tier 2 pipelines**: Queue as tasks for Worker execution
+5. Worker executes Tier 2 ops with network locked at runtime
+
+---
+
 ## Agent Best Practices
 
 ### 1. Tool Priority: Serena First

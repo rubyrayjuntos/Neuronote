@@ -5,8 +5,18 @@
 - [x] QuickJS Tier 1 Operator Execution (2025-12-23)
   - Tier 1 operators now run inside QuickJS WASM sandbox
   - Pipeline executor added to KERNEL_SOURCE
-  - 12 new security tests added (376 total tests)
   - Paper claims are now accurate
+  
+- [x] Worker Security Lockdown (2025-12-24)
+  - Tier 2 Worker now blocks: fetch() (except data:), WebSocket, XMLHttpRequest, importScripts
+  - Deleted: indexedDB, caches
+  - 17 security tests in WasmKernel.test.ts
+  - 381 total tests passing
+  
+- [x] Paper Reframing: Hybrid Runtime / Governance by Topology
+  - Tier 2 described as "Host-Managed Accelerators" (trusted Host code)
+  - AI danger is in composition, not invocation
+  - Added "Governance by Topology" security model explanation
 
 ## Implementation Details: QuickJS Tier 1
 
