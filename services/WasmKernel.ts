@@ -525,6 +525,45 @@ globalThis.dispatch = function(event, payload, scopeId) {
 const WORKER_BLOB = `
 import { getQuickJS } from "https://esm.sh/quickjs-emscripten@0.29.0";
 
+// === SECURITY LOCKDOWN ===
+// Block dangerous APIs even in Tier 2 Worker scope
+// Only allow data: URL fetches for internal image/audio processing
+
+const _originalFetch = self.fetch;
+self.fetch = function(url, options) {
+    const urlStr = typeof url === 'string' ? url : url?.url || '';
+    // Only allow data: URLs (for internal blob conversion)
+    if (!urlStr.startsWith('data:')) {
+        console.error('[GOVERNANCE] Network fetch blocked:', urlStr.substring(0, 50));
+        return Promise.reject(new Error('GOVERNANCE: Network access blocked in sandbox'));
+    }
+    return _originalFetch.call(self, url, options);
+};
+
+// Block WebSocket entirely
+self.WebSocket = function() {
+    throw new Error('GOVERNANCE: WebSocket access blocked in sandbox');
+};
+
+// Block XMLHttpRequest entirely  
+self.XMLHttpRequest = function() {
+    throw new Error('GOVERNANCE: XMLHttpRequest access blocked in sandbox');
+};
+
+// Block importScripts (prevent loading external code)
+self.importScripts = function() {
+    throw new Error('GOVERNANCE: importScripts blocked in sandbox');
+};
+
+// Block IndexedDB (prevent persistent storage outside Host control)
+delete self.indexedDB;
+
+// Block cache API
+delete self.caches;
+
+// Log security lockdown
+console.log('[GOVERNANCE] Worker sandbox locked: fetch→data:only, WebSocket→blocked, XHR→blocked');
+
 // Injected Governance Constants (from Host)
 const MAX_INSTRUCTIONS = ${MAX_INSTRUCTIONS};
 const WASM_MEMORY_LIMIT = ${WASM_MEMORY_LIMIT};
@@ -544,7 +583,8 @@ let globalContext = null; // Cache for native use
 let globalDef = null;
 
 // --- TIER 2: DATAFLOW ENGINE (NATIVE JS) ---
-// This runs in the Worker.
+// This runs in the Worker with restricted capabilities.
+// Network access is blocked except for data: URL conversion.
 
 // Helper: Async Image Processor using OffscreenCanvas
 async function processImage(dataUrl, effect, params = {}) {

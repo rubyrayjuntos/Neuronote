@@ -176,3 +176,69 @@ describe('Pipeline Classification', () => {
     expect(hasTier2).toBe(true);
   });
 });
+
+describe('Worker Security Lockdown', () => {
+  // These tests verify the WORKER_BLOB contains the security lockdown code
+  // Runtime verification would require browser integration tests
+  
+  it('should block network fetch in Worker blob', () => {
+    // The WORKER_BLOB is a template string, we need to read it indirectly
+    // by checking the WasmKernel module structure
+    const fs = require('fs');
+    const path = require('path');
+    const wasmKernelSource = fs.readFileSync(
+      path.join(__dirname, 'WasmKernel.ts'), 
+      'utf-8'
+    );
+    
+    // Verify security lockdown code is present
+    expect(wasmKernelSource).toContain("GOVERNANCE: Network access blocked");
+    expect(wasmKernelSource).toContain("urlStr.startsWith('data:')");
+  });
+  
+  it('should block WebSocket in Worker blob', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const wasmKernelSource = fs.readFileSync(
+      path.join(__dirname, 'WasmKernel.ts'), 
+      'utf-8'
+    );
+    
+    expect(wasmKernelSource).toContain("GOVERNANCE: WebSocket access blocked");
+    expect(wasmKernelSource).toContain("self.WebSocket = function()");
+  });
+  
+  it('should block XMLHttpRequest in Worker blob', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const wasmKernelSource = fs.readFileSync(
+      path.join(__dirname, 'WasmKernel.ts'), 
+      'utf-8'
+    );
+    
+    expect(wasmKernelSource).toContain("GOVERNANCE: XMLHttpRequest access blocked");
+  });
+  
+  it('should block importScripts in Worker blob', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const wasmKernelSource = fs.readFileSync(
+      path.join(__dirname, 'WasmKernel.ts'), 
+      'utf-8'
+    );
+    
+    expect(wasmKernelSource).toContain("GOVERNANCE: importScripts blocked");
+  });
+  
+  it('should delete IndexedDB access in Worker blob', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const wasmKernelSource = fs.readFileSync(
+      path.join(__dirname, 'WasmKernel.ts'), 
+      'utf-8'
+    );
+    
+    expect(wasmKernelSource).toContain("delete self.indexedDB");
+  });
+});
+
