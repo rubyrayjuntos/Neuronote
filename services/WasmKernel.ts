@@ -16,14 +16,31 @@ const OPTICS_SOURCE = `
 
 /**
  * THE STORE COMONAD
- * @param {any} pos The View
- * @param {Function} peek The Continuation (A -> S)
+ * A Store is a pair of (pos, peek) where:
+ * - pos: The current focused value (the "view")
+ * - peek: A function to reconstruct the whole from a new focused value (the "continuation")
+ * 
+ * @param {*} pos - The focused value (view into the data structure)
+ * @param {function(*): *} peek - Continuation: given new value, returns updated whole
+ * @returns {{pos: *, peek: function}} Store comonad instance
  */
 const Store = (pos, peek) => ({ pos, peek });
 
 /**
- * Prop Lens: Focus on a property 'k'
- * Replaces: s[k]
+ * Prop Lens: Focus on a property 'k' of an object or array
+ * 
+ * Creates a lens that focuses on property k of state s.
+ * - get: s[k]
+ * - set: immutably updates s[k] to new value
+ * 
+ * BEHAVIOR NOTES:
+ * - For arrays: Returns array with updated index
+ * - For objects: Returns object with updated property
+ * - For null/undefined: Creates new object { [k]: value }
+ *   (Does NOT create sparse arrays for numeric keys on null - use explicit array init if needed)
+ * 
+ * @param {string|number} k - Property key to focus on
+ * @returns {function(*): Store} Lens function: state -> Store
  */
 const prop = (k) => (s) => Store(
     s ? s[k] : undefined,
@@ -34,15 +51,21 @@ const prop = (k) => (s) => Store(
             copy[k] = v;
             return copy;
         }
-        // Handle null/undefined state by creating object
+        // Handle null/undefined state by creating object (not array)
         const base = s ?? {};
         return { ...base, [k]: v };
     }
 );
 
 /**
- * Composition: (A->B) -> (B->C) -> (A->C)
+ * Lens Composition: (A->B) -> (B->C) -> (A->C)
+ * 
+ * Composes two lenses to create a deeper focus.
  * lens(A -> B) composed with lens(B -> C) creates lens(A -> C).
+ * 
+ * @param {function(*): Store} ab - Outer lens (focuses A to B)
+ * @param {function(*): Store} bc - Inner lens (focuses B to C)
+ * @returns {function(*): Store} Composed lens (focuses A to C)
  */
 const compose = (ab, bc) => (a) => {
     const storeAB = ab(a);
@@ -54,15 +77,35 @@ const compose = (ab, bc) => (a) => {
 };
 
 /**
+ * Lens cache for memoization - avoids rebuilding on hot paths
+ * @type {Map<string, function>}
+ */
+const _lensCache = new Map();
+
+/**
  * Path Lens: "user.profile.name" -> Lens(Context -> string)
+ * 
+ * Creates a composed lens from a dot-separated path string.
+ * Results are memoized for performance on repeated access.
+ * 
+ * @param {string} path - Dot-separated path (e.g., "user.profile.name")
+ * @returns {function(*): Store} Lens function for the path
  */
 const lensPath = (path) => {
-    if (!path) return (s) => Store(s, (v) => v); // Identity
+    if (!path) return (s) => Store(s, (v) => v); // Identity lens
+    
+    // Check cache first
+    if (_lensCache.has(path)) return _lensCache.get(path);
+    
     const keys = path.split('.');
-    return keys.reduce((acc, key) => {
+    const lens = keys.reduce((acc, key) => {
         const nextLens = prop(key);
         return acc ? compose(acc, nextLens) : nextLens;
     }, null);
+    
+    // Cache for future use
+    _lensCache.set(path, lens);
+    return lens;
 };
 `;
 

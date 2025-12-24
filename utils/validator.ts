@@ -7,6 +7,9 @@ import {
     FORBIDDEN_TAILWIND_CLASSES, ALLOWED_TYPES, MAX_PIPELINE_COMPLEXITY
 } from '../constants';
 
+// Re-export types for consumers
+export type { VerificationReport, CheckResult };
+
 /**
  * 7. Verification & Trust Assurance
  * This module implements the 3-Phase Gatekeeper Pipeline.

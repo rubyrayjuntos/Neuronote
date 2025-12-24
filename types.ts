@@ -193,7 +193,7 @@ export interface VerificationReport {
 export interface SystemLog {
   id: string;
   timestamp: number;
-  source: 'HOST' | 'GUEST' | 'VALIDATOR' | 'STORAGE' | 'HARNESS' | 'KERNEL';
+  source: 'HOST' | 'GUEST' | 'VALIDATOR' | 'STORAGE' | 'HARNESS' | 'KERNEL' | 'SIM';
   type: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
   message: string;
   payload?: unknown;
@@ -212,7 +212,9 @@ export interface MigrationStats {
   dropped: number;
   added: number;
   ghost: number;
-  ghostKeys?: string[]; 
+  typeChanged: number;
+  ghostKeys?: string[];
+  typeChangedKeys?: string[];
   details: string;
 }
 

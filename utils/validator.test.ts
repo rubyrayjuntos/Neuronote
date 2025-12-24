@@ -12,19 +12,23 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import * as fc from 'fast-check';
 import { verifyProposal, VerificationReport, CheckResult } from './validator';
 import { OPERATOR_REGISTRY } from '../operators/registry';
-import type { AppDefinition, ViewNode, Pipeline, StateMachine } from '../types';
+import type { AppDefinition, ViewNode, PipelineDefinition, MachineDefinition } from '../types';
 
 // ============================================================================
 // TEST UTILITIES
 // ============================================================================
 
-/** Create a minimal valid app definition for testing */
-function createMinimalApp(overrides?: Partial<AppDefinition>): AppDefinition {
+/** 
+ * Create a minimal valid app definition for testing.
+ * Accepts Record<string, any> for overrides to allow testing invalid inputs
+ * that would be caught by the validator at runtime.
+ */
+function createMinimalApp(overrides?: Record<string, any>): AppDefinition {
   return {
-    id: 'test-app',
+    version: 'test-v1',
     view: {
       id: 'root',
-      type: 'container',
+      type: 'Layout.Container',
       children: []
     },
     pipelines: {},
@@ -36,7 +40,7 @@ function createMinimalApp(overrides?: Partial<AppDefinition>): AppDefinition {
     },
     initialContext: {},
     ...overrides
-  };
+  } as AppDefinition;
 }
 
 /** Helper to get all checks from a report */
@@ -85,7 +89,7 @@ describe('Phase A: Structural Validation', () => {
         const app = createMinimalApp({
           view: {
             id: 'root',
-            type: componentType,
+            type: componentType as ViewNode['type'],
             children: []
           }
         });
@@ -102,7 +106,7 @@ describe('Phase A: Structural Validation', () => {
       const app = createMinimalApp({
         view: {
           id: 'root',
-          type: 'MaliciousComponent',
+          type: 'MaliciousComponent' as ViewNode['type'],
           children: []
         }
       });
@@ -115,7 +119,7 @@ describe('Phase A: Structural Validation', () => {
       const app = createMinimalApp({
         view: {
           id: 'root',
-          type: 'script',
+          type: 'script' as ViewNode['type'],
           children: []
         }
       });
@@ -128,7 +132,7 @@ describe('Phase A: Structural Validation', () => {
       const app = createMinimalApp({
         view: {
           id: 'root',
-          type: 'iframe',
+          type: 'iframe' as ViewNode['type'],
           children: []
         }
       });

@@ -254,7 +254,7 @@ export class SerenaBridge {
         'Inputs:',
         ...Object.entries(spec.inputs).map(([name, type]) => `  - ${name}: ${type}`),
         '',
-        `Output: ${spec.outputType}`,
+        `Output: ${spec.output}`,
       ];
       
       // Only include examples if config allows

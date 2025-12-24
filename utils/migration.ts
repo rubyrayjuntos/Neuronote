@@ -54,15 +54,25 @@ export class AutoLens implements Lens<AppContext, AppContext> {
   /**
    * Backward: Salvage data from a New Context back into Old Schema.
    * Used during Rollbacks to preserve edits made in the "bad" version.
+   * 
+   * Satisfies PutGet Law: get(put(s, t)) === t (for keys in t)
+   * Satisfies GetPut Law: put(s, get(s)) === s (preserves source keys)
    */
   put(source: AppContext, target: AppContext): AppContext {
-    // 1. Start with Old Schema defaults
-    const restored = { ...this.sourceDef.initialContext };
+    // 1. Start from source (preserves keys not touched by target) - Required for GetPut law
+    const restored = { ...source };
     
     // 2. Overlay ALL Target Data (Preserves "Future" Data / Ghost Data)
     Object.keys(target).forEach(key => {
       if (!key.startsWith('_')) {
         restored[key] = target[key];
+      }
+    });
+
+    // 3. Apply defaults only for keys missing from both source and target
+    Object.keys(this.sourceDef.initialContext).forEach(key => {
+      if (!(key in restored) && !key.startsWith('_')) {
+        restored[key] = this.sourceDef.initialContext[key];
       }
     });
 
@@ -82,8 +92,10 @@ export function calculateMigrationStats(prev: AppContext, next: AppContext, targ
   let added = 0;
   let dropped = 0;
   let ghost = 0;
+  let typeChanged = 0;
   const droppedKeys: string[] = [];
   const ghostKeys: string[] = [];
+  const typeChangedKeys: string[] = [];
 
   nextKeys.forEach(k => {
     if (k.startsWith('_')) return; // Ignore system keys in stats
@@ -94,6 +106,13 @@ export function calculateMigrationStats(prev: AppContext, next: AppContext, targ
         if (targetDef && !schemaKeys.has(k)) {
             ghost++;
             ghostKeys.push(k);
+        }
+        // Check for type changes (potential coercion issues)
+        const prevType = typeof prev[k];
+        const nextType = typeof next[k];
+        if (prevType !== nextType && prev[k] !== null && next[k] !== null) {
+            typeChanged++;
+            typeChangedKeys.push(`${k}: ${prevType} → ${nextType}`);
         }
     } else {
         added++;
@@ -113,8 +132,14 @@ export function calculateMigrationStats(prev: AppContext, next: AppContext, targ
     added,
     dropped,
     ghost,
+    typeChanged,
     ghostKeys,
-    details: droppedKeys.length > 0 ? `Dropped: ${droppedKeys.join(', ')}` : 'Lossless'
+    typeChangedKeys,
+    details: droppedKeys.length > 0 
+      ? `Dropped: ${droppedKeys.join(', ')}` 
+      : typeChangedKeys.length > 0 
+        ? `Type changes: ${typeChangedKeys.join(', ')}` 
+        : 'Lossless'
   };
 }
 
@@ -147,12 +172,17 @@ export function salvageContext(brokenContext: AppContext, targetDef: AppDefiniti
 /**
  * Validates the Lens Laws for the given migration.
  * Used for System Integrity checks.
+ * 
+ * Tests both fundamental lens laws:
+ * - GetPut: put(s, get(s)) === s  (round-trip preserves source)
+ * - PutGet: get(put(s, t)) === t  (put then get returns target, for overlapping keys)
  */
 export function verifyLensLaws(source: AppContext, nextDef: AppDefinition): { satisfied: boolean, score: number, violation?: string } {
     try {
         const lens = new AutoLens({ ...nextDef, initialContext: source }, nextDef);
         
-        // 1. Round Trip (Get -> Put)
+        // === LAW 1: GetPut - put(s, get(s)) === s ===
+        // "If you get a value and put it back, nothing changes"
         const evolved = lens.get(source);
         const salvaged = lens.put(source, evolved);
         
@@ -161,7 +191,36 @@ export function verifyLensLaws(source: AppContext, nextDef: AppDefinition): { sa
         const lostKeys = sourceKeys.filter(k => !salvaged.hasOwnProperty(k));
         
         if (lostKeys.length > 0) {
-            return { satisfied: false, score: 0, violation: `Lens Law Broken: Round-trip lost keys [${lostKeys.join(', ')}]` };
+            return { satisfied: false, score: 0, violation: `GetPut Law Broken: Round-trip lost keys [${lostKeys.join(', ')}]` };
+        }
+        
+        // Check values are preserved (not just keys)
+        const changedValues = sourceKeys.filter(k => {
+            const srcVal = JSON.stringify(source[k]);
+            const resVal = JSON.stringify(salvaged[k]);
+            return srcVal !== resVal;
+        });
+        
+        if (changedValues.length > 0) {
+            return { satisfied: false, score: 50, violation: `GetPut Law Partial: Values changed for keys [${changedValues.join(', ')}]` };
+        }
+        
+        // === LAW 2: PutGet - get(put(s, t)) === t ===
+        // "If you put a value and get it back, you get what you put"
+        // Test with a synthetic target that differs from source
+        const syntheticTarget: AppContext = { 
+            ...nextDef.initialContext
+        };
+        // Add a non-system test key (must NOT start with _ to pass through lens)
+        const testKey = 'putget_test_marker';
+        syntheticTarget[testKey] = 'test_value_12345';
+        
+        const afterPut = lens.put(source, syntheticTarget);
+        const afterPutGet = lens.get(afterPut);
+        
+        // The test key should survive the round-trip
+        if (afterPutGet[testKey] !== syntheticTarget[testKey]) {
+            return { satisfied: false, score: 50, violation: `PutGet Law Broken: put->get did not preserve target value` };
         }
         
         return { satisfied: true, score: 100 };

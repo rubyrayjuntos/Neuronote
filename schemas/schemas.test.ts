@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { z } from 'zod';
 import { 
   AppDefinitionSchema,
   ViewNodeSchema,
@@ -508,9 +509,10 @@ describe('Zod Schema Validation', () => {
   
   describe('buildRepairFeedback', () => {
     it('should format feedback with applied fixes and remaining errors', () => {
+      // Mock ZodIssue - only path and message are used by buildRepairFeedback
       const issues = [
         { path: ['machine', 'initial'], message: 'Required', code: 'invalid_type' as const, expected: 'string', received: 'undefined' },
-      ];
+      ] as unknown as z.ZodIssue[];
       const fixes = ['Fixed type casing at view: "input.audio" → "Input.Audio"'];
       
       const feedback = buildRepairFeedback(issues, fixes);
@@ -522,9 +524,10 @@ describe('Zod Schema Validation', () => {
     });
     
     it('should format feedback without applied fixes', () => {
+      // Mock ZodIssue - only path and message are used by buildRepairFeedback
       const issues = [
         { path: ['version'], message: 'Invalid format', code: 'invalid_string' as const, validation: 'regex' },
-      ];
+      ] as unknown as z.ZodIssue[];
       
       const feedback = buildRepairFeedback(issues, []);
       

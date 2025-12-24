@@ -5,7 +5,31 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useAppStore } from './appStore';
 import { INITIAL_APP } from '../constants';
-import type { AppDefinition, SystemLog, ChangeRecord } from '../types';
+import type { AppDefinition, SystemLog, ChangeRecord, VerificationReport } from '../types';
+
+/** Create a minimal test ChangeRecord with required fields */
+function createTestChangeRecord(overrides: Partial<ChangeRecord> = {}): ChangeRecord {
+  const defaultReport: VerificationReport = {
+    timestamp: Date.now(),
+    passed: true,
+    score: 100,
+    checks: { structural: [], semantic: [], honesty: [] }
+  };
+  return {
+    id: 'test-change',
+    timestamp: Date.now(),
+    prompt: 'Test prompt',
+    oldDef: INITIAL_APP,
+    newDef: { ...INITIAL_APP, version: 'v2' },
+    status: 'accepted',
+    verificationReport: defaultReport,
+    verificationScore: 100,
+    diff: { uiNodes: 0, states: 0, dataKeys: 0 },
+    latencyMs: 100,
+    version: 'v2',
+    ...overrides
+  };
+}
 
 describe('Zustand App Store', () => {
   // Reset store before each test
@@ -140,14 +164,7 @@ describe('Zustand App Store', () => {
 
   describe('History Actions', () => {
     it('addChangeRecord should prepend to history', () => {
-      const record: ChangeRecord = {
-        id: 'change-1',
-        timestamp: Date.now(),
-        prompt: 'Add button',
-        oldDef: INITIAL_APP,
-        newDef: { ...INITIAL_APP, version: 'v2' },
-        status: 'accepted',
-      };
+      const record = createTestChangeRecord({ id: 'change-1', prompt: 'Add button' });
       
       useAppStore.getState().addChangeRecord(record);
       
@@ -156,14 +173,7 @@ describe('Zustand App Store', () => {
     });
 
     it('updateChangeRecord should modify existing record', () => {
-      const record: ChangeRecord = {
-        id: 'change-1',
-        timestamp: Date.now(),
-        prompt: 'Add button',
-        oldDef: INITIAL_APP,
-        newDef: { ...INITIAL_APP, version: 'v2' },
-        status: 'accepted',
-      };
+      const record = createTestChangeRecord({ id: 'change-1', prompt: 'Add button' });
       
       useAppStore.getState().addChangeRecord(record);
       useAppStore.getState().updateChangeRecord('change-1', { 
@@ -197,14 +207,12 @@ describe('Zustand App Store', () => {
     it('rollback should revert to old state and update record', () => {
       const oldDef = INITIAL_APP;
       const newDef: AppDefinition = { ...INITIAL_APP, version: 'broken-v1' };
-      const record: ChangeRecord = {
+      const record = createTestChangeRecord({
         id: 'change-rollback',
-        timestamp: Date.now(),
         prompt: 'Break it',
         oldDef,
         newDef,
-        status: 'accepted',
-      };
+      });
       
       // Apply the change first
       useAppStore.getState().addChangeRecord(record);
