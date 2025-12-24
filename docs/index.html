@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NeuroNote Concept Explorer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    .facet-chip { transition: all 0.15s ease; }
+    .facet-chip:hover { transform: translateY(-1px); }
+    .facet-chip.active { ring: 2px; }
+    .concept-card { transition: all 0.2s ease; }
+    .concept-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    .relation-link { text-decoration: none; }
+    .relation-link:hover { text-decoration: underline; }
+    
+    /* Graph styles */
+    .graph-container { position: relative; }
+    .graph-node { cursor: pointer; }
+    .graph-node:hover circle { stroke-width: 3px; }
+    .graph-link { stroke-opacity: 0.4; }
+    .graph-link:hover { stroke-opacity: 1; }
+    .graph-label { pointer-events: none; font-size: 10px; fill: #a1a1aa; }
+    .node-tooltip {
+      position: absolute;
+      background: #27272a;
+      border: 1px solid #3f3f46;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      pointer-events: none;
+      z-index: 100;
+      max-width: 250px;
+    }
+  </style>
+</head>
+<body class="bg-zinc-900 text-zinc-100 min-h-screen">
+  <div class="max-w-7xl mx-auto px-4 py-8">
+    <!-- Header -->
+    <header class="mb-8">
+      <h1 class="text-3xl font-bold text-indigo-400 mb-2">NeuroNote Concept Explorer</h1>
+      <p class="text-zinc-400">Navigate documentation through multiple dimensions</p>
+    </header>
+
+    <!-- View Toggle -->
+    <div class="flex gap-2 mb-6">
+      <button id="view-cards" class="px-4 py-2 bg-indigo-600 text-white rounded-lg">Cards</button>
+      <button id="view-graph" class="px-4 py-2 bg-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-600">Graph</button>
+    </div>
+
+    <!-- Search -->
+    <div class="mb-6">
+      <input 
+        type="text" 
+        id="search" 
+        placeholder="Search concepts..." 
+        class="w-full px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-zinc-100"
+      />
+    </div>
+
+    <div class="flex gap-6">
+      <!-- Facets Sidebar -->
+      <aside id="facets" class="w-64 flex-shrink-0">
+        <div class="sticky top-4 space-y-6">
+          <div class="flex justify-between items-center">
+            <span class="text-sm text-zinc-400" id="result-count">0 concepts</span>
+            <button id="clear-filters" class="text-xs text-indigo-400 hover:text-indigo-300">Clear all</button>
+          </div>
+          <!-- Facet groups will be injected here -->
+        </div>
+      </aside>
+
+      <!-- Results (Card View) -->
+      <main id="results" class="flex-1 grid gap-4">
+        <!-- Concept cards will be injected here -->
+      </main>
+
+      <!-- Graph View (hidden by default) -->
+      <main id="graph-container" class="flex-1 hidden" style="min-height: 600px;">
+        <svg id="graph-svg" class="w-full h-full rounded-lg" style="background: #18181b;"></svg>
+      </main>
+    </div>
+  </div>
+
+  <!-- Concept Detail Modal -->
+  <div id="modal" class="fixed inset-0 bg-black/70 hidden items-center justify-center z-50">
+    <div class="bg-zinc-800 rounded-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto">
+      <div class="p-6" id="modal-content">
+        <!-- Content injected here -->
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let conceptGraph = null;
+    let activeFilters = {}; // { facetId: Set<valueId> }
+
+    // Load concept graph
+    async function init() {
+      try {
+        const response = await fetch('_meta/concept-graph.json');
+        conceptGraph = await response.json();
+        renderFacets();
+        renderResults();
+      } catch (err) {
+        document.getElementById('results').innerHTML = `
+          <div class="col-span-full text-center py-12 text-zinc-500">
+            <p>Failed to load concept-graph.json</p>
+            <p class="text-sm mt-2">${err.message}</p>
+          </div>
+        `;
+      }
+    }
+
+    // Render facet sidebar
+    function renderFacets() {
+      const container = document.getElementById('facets');
+      const facetsHtml = Object.entries(conceptGraph.facets).map(([facetId, facet]) => {
+        const valuesHtml = Object.entries(facet.values)
+          .sort((a, b) => (a[1].order || 0) - (b[1].order || 0))
+          .map(([valueId, value]) => {
+            const count = countConceptsWithFacetValue(facetId, valueId);
+            const color = value.color || '#6366f1';
+            return `
+              <button 
+                class="facet-chip flex items-center justify-between w-full px-3 py-1.5 rounded text-sm text-left hover:bg-zinc-700"
+                data-facet="${facetId}"
+                data-value="${valueId}"
+                style="border-left: 3px solid ${color}"
+              >
+                <span>${value.label}</span>
+                <span class="text-zinc-500 text-xs">${count}</span>
+              </button>
+            `;
+          }).join('');
+
+        return `
+          <div class="bg-zinc-800 rounded-lg p-4">
+            <h3 class="text-sm font-semibold text-zinc-300 mb-3 flex items-center gap-2">
+              <span>${facet.icon || '📁'}</span>
+              ${facet.label}
+            </h3>
+            <div class="space-y-1">
+              ${valuesHtml}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      container.innerHTML = `
+        <div class="sticky top-4 space-y-6">
+          <div class="flex justify-between items-center">
+            <span class="text-sm text-zinc-400" id="result-count">0 concepts</span>
+            <button id="clear-filters" class="text-xs text-indigo-400 hover:text-indigo-300">Clear all</button>
+          </div>
+          ${facetsHtml}
+        </div>
+      `;
+
+      // Attach event listeners
+      container.querySelectorAll('.facet-chip').forEach(chip => {
+        chip.addEventListener('click', () => toggleFilter(chip.dataset.facet, chip.dataset.value));
+      });
+      document.getElementById('clear-filters').addEventListener('click', clearFilters);
+    }
+
+    // Count concepts matching a facet value
+    function countConceptsWithFacetValue(facetId, valueId) {
+      return Object.values(conceptGraph.concepts).filter(c => {
+        const values = c[facetId];
+        if (Array.isArray(values)) return values.includes(valueId);
+        return values === valueId;
+      }).length;
+    }
+
+    // Toggle a filter
+    function toggleFilter(facetId, valueId) {
+      if (!activeFilters[facetId]) activeFilters[facetId] = new Set();
+      
+      if (activeFilters[facetId].has(valueId)) {
+        activeFilters[facetId].delete(valueId);
+        if (activeFilters[facetId].size === 0) delete activeFilters[facetId];
+      } else {
+        activeFilters[facetId].add(valueId);
+      }
+
+      updateFacetChipStyles();
+      renderResults();
+    }
+
+    // Clear all filters
+    function clearFilters() {
+      activeFilters = {};
+      document.getElementById('search').value = '';
+      updateFacetChipStyles();
+      renderResults();
+    }
+
+    // Update chip visual states
+    function updateFacetChipStyles() {
+      document.querySelectorAll('.facet-chip').forEach(chip => {
+        const isActive = activeFilters[chip.dataset.facet]?.has(chip.dataset.value);
+        chip.classList.toggle('bg-indigo-600', isActive);
+        chip.classList.toggle('bg-transparent', !isActive);
+      });
+    }
+
+    // Filter concepts
+    function getFilteredConcepts() {
+      const searchTerm = document.getElementById('search').value.toLowerCase();
+      
+      return Object.entries(conceptGraph.concepts).filter(([id, concept]) => {
+        // Search filter
+        if (searchTerm) {
+          const searchable = [
+            concept.title,
+            concept.summary,
+            ...(concept.keywords || [])
+          ].join(' ').toLowerCase();
+          if (!searchable.includes(searchTerm)) return false;
+        }
+
+        // Facet filters (AND between facets, OR within facet)
+        for (const [facetId, selectedValues] of Object.entries(activeFilters)) {
+          const conceptValues = concept[facetId];
+          if (!conceptValues) return false;
+          
+          const valuesArray = Array.isArray(conceptValues) ? conceptValues : [conceptValues];
+          const hasMatch = valuesArray.some(v => selectedValues.has(v));
+          if (!hasMatch) return false;
+        }
+
+        return true;
+      });
+    }
+
+    // Render results
+    function renderResults() {
+      const filtered = getFilteredConcepts();
+      document.getElementById('result-count').textContent = `${filtered.length} concepts`;
+
+      const container = document.getElementById('results');
+      
+      if (filtered.length === 0) {
+        container.innerHTML = `
+          <div class="col-span-full text-center py-12 text-zinc-500">
+            No concepts match your filters
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = filtered.map(([id, concept]) => {
+        const difficultyColors = {
+          beginner: 'bg-green-600',
+          intermediate: 'bg-yellow-600',
+          advanced: 'bg-red-600'
+        };
+
+        const tags = [
+          ...(concept.stage || []).slice(0, 2),
+          ...(concept.domain || []).slice(0, 1)
+        ].map(t => `<span class="px-2 py-0.5 bg-zinc-700 rounded text-xs">${t}</span>`).join('');
+
+        return `
+          <div class="concept-card bg-zinc-800 rounded-lg p-4 cursor-pointer border border-zinc-700" data-id="${id}">
+            <div class="flex justify-between items-start mb-2">
+              <h3 class="font-semibold text-indigo-300">${concept.title}</h3>
+              ${concept.difficulty ? `<span class="px-2 py-0.5 ${difficultyColors[concept.difficulty]} rounded text-xs">${concept.difficulty}</span>` : ''}
+            </div>
+            <p class="text-sm text-zinc-400 mb-3">${concept.summary}</p>
+            <div class="flex flex-wrap gap-1">
+              ${tags}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Attach click handlers
+      container.querySelectorAll('.concept-card').forEach(card => {
+        card.addEventListener('click', () => showConceptDetail(card.dataset.id));
+      });
+    }
+
+    // Show concept detail modal
+    function showConceptDetail(conceptId) {
+      const concept = conceptGraph.concepts[conceptId];
+      if (!concept) return;
+
+      const modal = document.getElementById('modal');
+      const content = document.getElementById('modal-content');
+
+      const relationsHtml = concept.relations ? Object.entries(concept.relations)
+        .filter(([, targets]) => targets && targets.length > 0)
+        .map(([type, targets]) => `
+          <div class="mb-2">
+            <span class="text-zinc-500 text-sm">${type}:</span>
+            <span class="ml-2">
+              ${targets.map(t => `<a href="#" class="relation-link text-indigo-400" data-target="${t}">${conceptGraph.concepts[t]?.title || t}</a>`).join(', ')}
+            </span>
+          </div>
+        `).join('') : '';
+
+      const filesHtml = concept.sourceFiles?.length ? `
+        <div class="mt-4">
+          <h4 class="text-sm font-semibold text-zinc-300 mb-2">Source Files</h4>
+          <div class="space-y-1">
+            ${concept.sourceFiles.map(f => `<code class="block text-sm text-indigo-300 bg-zinc-900 px-2 py-1 rounded">${f}</code>`).join('')}
+          </div>
+        </div>
+      ` : '';
+
+      content.innerHTML = `
+        <div class="flex justify-between items-start mb-4">
+          <h2 class="text-xl font-bold text-indigo-400">${concept.title}</h2>
+          <button id="close-modal" class="text-zinc-500 hover:text-zinc-300 text-2xl">&times;</button>
+        </div>
+        <p class="text-zinc-300 mb-4">${concept.summary}</p>
+        
+        <div class="flex flex-wrap gap-2 mb-4">
+          ${(concept.stage || []).map(s => `<span class="px-2 py-1 bg-indigo-900/50 text-indigo-300 rounded text-sm">${s}</span>`).join('')}
+          ${(concept.trust || []).map(t => `<span class="px-2 py-1 bg-amber-900/50 text-amber-300 rounded text-sm">${t}</span>`).join('')}
+          ${(concept.domain || []).map(d => `<span class="px-2 py-1 bg-emerald-900/50 text-emerald-300 rounded text-sm">${d}</span>`).join('')}
+        </div>
+
+        ${relationsHtml ? `
+          <div class="mt-4 border-t border-zinc-700 pt-4">
+            <h4 class="text-sm font-semibold text-zinc-300 mb-2">Relationships</h4>
+            ${relationsHtml}
+          </div>
+        ` : ''}
+
+        ${filesHtml}
+
+        ${concept.content ? `
+          <div class="mt-4 border-t border-zinc-700 pt-4">
+            <a href="${concept.content}" class="text-indigo-400 hover:text-indigo-300">Read full documentation →</a>
+          </div>
+        ` : ''}
+      `;
+
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+
+      // Close handlers
+      document.getElementById('close-modal').addEventListener('click', closeModal);
+      modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+      
+      // Relation link handlers
+      content.querySelectorAll('.relation-link').forEach(link => {
+        link.addEventListener('click', (e) => {
+          e.preventDefault();
+          showConceptDetail(link.dataset.target);
+        });
+      });
+    }
+
+    function closeModal() {
+      const modal = document.getElementById('modal');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+
+    // Search input handler
+    document.getElementById('search').addEventListener('input', () => {
+      renderResults();
+      if (!document.getElementById('graph-container').classList.contains('hidden')) {
+        renderGraph();
+      }
+    });
+
+    // View toggle handlers
+    document.getElementById('view-cards').addEventListener('click', () => {
+      document.getElementById('results').classList.remove('hidden');
+      document.getElementById('graph-container').classList.add('hidden');
+      document.getElementById('view-cards').classList.add('bg-indigo-600');
+      document.getElementById('view-cards').classList.remove('bg-zinc-700');
+      document.getElementById('view-graph').classList.remove('bg-indigo-600');
+      document.getElementById('view-graph').classList.add('bg-zinc-700');
+    });
+
+    document.getElementById('view-graph').addEventListener('click', () => {
+      document.getElementById('results').classList.add('hidden');
+      document.getElementById('graph-container').classList.remove('hidden');
+      document.getElementById('view-graph').classList.add('bg-indigo-600');
+      document.getElementById('view-graph').classList.remove('bg-zinc-700');
+      document.getElementById('view-cards').classList.remove('bg-indigo-600');
+      document.getElementById('view-cards').classList.add('bg-zinc-700');
+      renderGraph();
+    });
+
+    // D3 Graph Rendering
+    let simulation = null;
+
+    function renderGraph() {
+      const svg = d3.select('#graph-svg');
+      svg.selectAll('*').remove();
+
+      const container = document.getElementById('graph-container');
+      const width = container.clientWidth;
+      const height = container.clientHeight || 600;
+
+      svg.attr('viewBox', [0, 0, width, height]);
+
+      const filtered = getFilteredConcepts();
+      const filteredIds = new Set(filtered.map(([id]) => id));
+
+      // Build nodes and links
+      const nodes = filtered.map(([id, concept]) => ({
+        id,
+        ...concept,
+        x: Math.random() * width,
+        y: Math.random() * height
+      }));
+
+      const links = [];
+      filtered.forEach(([id, concept]) => {
+        if (concept.relations) {
+          Object.entries(concept.relations).forEach(([type, targets]) => {
+            targets?.forEach(target => {
+              if (filteredIds.has(target)) {
+                links.push({ source: id, target, type });
+              }
+            });
+          });
+        }
+      });
+
+      // Domain colors
+      const domainColors = {
+        schema: '#10b981',
+        state: '#f59e0b',
+        ai: '#8b5cf6',
+        runtime: '#3b82f6',
+        security: '#ef4444',
+        testing: '#ec4899'
+      };
+
+      function getNodeColor(concept) {
+        const domain = concept.domain?.[0];
+        return domainColors[domain] || '#6366f1';
+      }
+
+      // Create simulation
+      simulation = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(links).id(d => d.id).distance(120))
+        .force('charge', d3.forceManyBody().strength(-300))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide().radius(40));
+
+      // Add zoom
+      const g = svg.append('g');
+      svg.call(d3.zoom()
+        .extent([[0, 0], [width, height]])
+        .scaleExtent([0.2, 4])
+        .on('zoom', (event) => g.attr('transform', event.transform))
+      );
+
+      // Draw links
+      const link = g.append('g')
+        .selectAll('line')
+        .data(links)
+        .join('line')
+        .attr('class', 'graph-link')
+        .attr('stroke', '#52525b')
+        .attr('stroke-width', 1.5);
+
+      // Draw nodes
+      const node = g.append('g')
+        .selectAll('g')
+        .data(nodes)
+        .join('g')
+        .attr('class', 'graph-node')
+        .call(d3.drag()
+          .on('start', dragstarted)
+          .on('drag', dragged)
+          .on('end', dragended)
+        );
+
+      node.append('circle')
+        .attr('r', d => 8 + (Object.keys(d.relations || {}).reduce((sum, k) => sum + (d.relations[k]?.length || 0), 0) * 2))
+        .attr('fill', d => getNodeColor(d))
+        .attr('stroke', '#27272a')
+        .attr('stroke-width', 2);
+
+      node.append('text')
+        .attr('class', 'graph-label')
+        .attr('dy', -15)
+        .attr('text-anchor', 'middle')
+        .text(d => d.title);
+
+      // Click to show detail
+      node.on('click', (event, d) => {
+        event.stopPropagation();
+        showConceptDetail(d.id);
+      });
+
+      // Hover tooltip
+      const tooltip = d3.select('body').append('div')
+        .attr('class', 'node-tooltip')
+        .style('opacity', 0);
+
+      node.on('mouseover', (event, d) => {
+        tooltip.transition().duration(200).style('opacity', 1);
+        tooltip.html(`<strong>${d.title}</strong><br/><span style="color: #a1a1aa;">${d.summary}</span>`)
+          .style('left', (event.pageX + 10) + 'px')
+          .style('top', (event.pageY - 10) + 'px');
+      }).on('mouseout', () => {
+        tooltip.transition().duration(300).style('opacity', 0);
+      });
+
+      // Simulation tick
+      simulation.on('tick', () => {
+        link
+          .attr('x1', d => d.source.x)
+          .attr('y1', d => d.source.y)
+          .attr('x2', d => d.target.x)
+          .attr('y2', d => d.target.y);
+
+        node.attr('transform', d => `translate(${d.x},${d.y})`);
+      });
+
+      function dragstarted(event, d) {
+        if (!event.active) simulation.alphaTarget(0.3).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+      }
+
+      function dragged(event, d) {
+        d.fx = event.x;
+        d.fy = event.y;
+      }
+
+      function dragended(event, d) {
+        if (!event.active) simulation.alphaTarget(0);
+        d.fx = null;
+        d.fy = null;
+      }
+    }
+
+    // Keyboard handler
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeModal();
+    });
+
+    // Initialize
+    init();
+  </script>
+</body>
+</html>

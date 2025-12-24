@@ -15,7 +15,9 @@ import { describe, it, expect } from 'vitest';
 import { 
   AutoLens, 
   migrateContext, 
-  salvageContext, 
+  migrateContextWithPatches,
+  salvageContext,
+  salvageContextWithPatches,
   calculateMigrationStats, 
   verifyLensLaws 
 } from './migration';
@@ -470,5 +472,80 @@ describe('Edge Cases', () => {
     expect(salvaged.count).toBe(100); // User change preserved
     expect(salvaged.name).toBe('original'); // Original data preserved
     expect(salvaged.newFeature).toBe(true); // Ghost data preserved
+  });
+});
+// ============================================================================
+// IMMER PATCH GENERATION TESTS
+// ============================================================================
+
+describe('migrateContextWithPatches', () => {
+  it('should generate patches for new keys', () => {
+    const source = { count: 0 };
+    const nextDef = createTestDef({ count: 0, newFeature: 'default' });
+    
+    const result = migrateContextWithPatches(source, nextDef);
+    
+    expect(result.context.newFeature).toBe('default');
+    expect(result.patches.length).toBeGreaterThan(0);
+    
+    // Should have an 'add' patch for the new key
+    const addPatch = result.patches.find(p => p.op === 'add' && p.path.includes('newFeature'));
+    expect(addPatch).toBeDefined();
+    expect(addPatch?.value).toBe('default');
+  });
+
+  it('should generate inverse patches for rollback', () => {
+    const source = { count: 5, name: 'test' };
+    const nextDef = createTestDef({ count: 0, name: '', theme: 'dark' });
+    
+    const result = migrateContextWithPatches(source, nextDef);
+    
+    expect(result.inversePatches.length).toBeGreaterThan(0);
+    // Inverse patches should undo the changes
+  });
+
+  it('should preserve existing values with patches', () => {
+    const source = { count: 42 };
+    const nextDef = createTestDef({ count: 0, extra: true });
+    
+    const result = migrateContextWithPatches(source, nextDef);
+    
+    expect(result.context.count).toBe(42); // Preserved
+    expect(result.context.extra).toBe(true); // Added
+    expect(result.stats.preserved).toBe(1);
+    expect(result.stats.added).toBe(1);
+  });
+
+  it('should return empty patches for identical contexts', () => {
+    const source = { count: 0, name: 'test' };
+    const nextDef = createTestDef({ count: 0, name: 'test' });
+    
+    const result = migrateContextWithPatches(source, nextDef);
+    
+    // No changes = no patches
+    expect(result.patches.length).toBe(0);
+    expect(result.inversePatches.length).toBe(0);
+  });
+});
+
+describe('salvageContextWithPatches', () => {
+  it('should generate patches during salvage', () => {
+    const brokenContext = { count: 100, newFeature: true };
+    const targetDef = createTestDef({ count: 0 });
+    
+    const result = salvageContextWithPatches(brokenContext, targetDef);
+    
+    expect(result.context.count).toBe(100); // Salvaged from broken
+    expect(result.patches.length).toBeGreaterThan(0);
+  });
+
+  it('should preserve ghost data during salvage with patches', () => {
+    const brokenContext = { count: 50, futureField: 'preserved' };
+    const targetDef = createTestDef({ count: 0 });
+    
+    const result = salvageContextWithPatches(brokenContext, targetDef);
+    
+    expect(result.context.count).toBe(50);
+    expect(result.context.futureField).toBe('preserved');
   });
 });

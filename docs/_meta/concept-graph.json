@@ -1,0 +1,660 @@
+{
+  "$schema": "./concept-graph.schema.json",
+  "version": "1.0.0",
+  
+  "facets": {
+    "stage": {
+      "label": "Data Flow Stage",
+      "description": "Where in the request lifecycle",
+      "icon": "→",
+      "values": {
+        "prompt": { "label": "Prompt", "order": 1 },
+        "proposal": { "label": "Proposal", "order": 2 },
+        "repair": { "label": "Repair", "order": 3 },
+        "validation": { "label": "Validation", "order": 4 },
+        "migration": { "label": "Migration", "order": 5 },
+        "store": { "label": "Store", "order": 6 },
+        "assembly": { "label": "Assembly", "order": 7 },
+        "render": { "label": "Render", "order": 8 },
+        "interaction": { "label": "Interaction", "order": 9 },
+        "execution": { "label": "Execution", "order": 10 }
+      }
+    },
+    "trust": {
+      "label": "Trust Boundary",
+      "description": "Security isolation level",
+      "icon": "🔒",
+      "values": {
+        "untrusted": { "label": "Untrusted", "color": "#EF4444" },
+        "gatekeeper": { "label": "Gatekeeper", "color": "#F59E0B" },
+        "trusted": { "label": "Trusted Host", "color": "#10B981" },
+        "sandboxed": { "label": "Sandboxed Guest", "color": "#3B82F6" }
+      }
+    },
+    "domain": {
+      "label": "Domain",
+      "description": "Problem area",
+      "icon": "📦",
+      "values": {
+        "contracts": { "label": "Contracts" },
+        "intelligence": { "label": "Intelligence" },
+        "verification": { "label": "Verification" },
+        "state": { "label": "State" },
+        "execution": { "label": "Execution" },
+        "presentation": { "label": "Presentation" },
+        "observability": { "label": "Observability" }
+      }
+    },
+    "actor": {
+      "label": "Actor",
+      "description": "Who/what is acting",
+      "icon": "👤",
+      "values": {
+        "user": { "label": "User" },
+        "ai": { "label": "AI" },
+        "host": { "label": "Host Kernel" },
+        "guest": { "label": "Guest Kernel" }
+      }
+    },
+    "type": {
+      "label": "Type",
+      "description": "Kind of concept",
+      "icon": "📄",
+      "values": {
+        "pattern": { "label": "Pattern" },
+        "technique": { "label": "Technique" },
+        "component": { "label": "Component" },
+        "schema": { "label": "Schema" },
+        "api": { "label": "API" },
+        "guide": { "label": "Guide" }
+      }
+    },
+    "difficulty": {
+      "label": "Difficulty",
+      "description": "Expertise required",
+      "icon": "📊",
+      "values": {
+        "beginner": { "label": "Beginner", "color": "#10B981" },
+        "intermediate": { "label": "Intermediate", "color": "#F59E0B" },
+        "advanced": { "label": "Advanced", "color": "#EF4444" }
+      }
+    }
+  },
+  
+  "concepts": {
+    "dual-kernel": {
+      "title": "Dual-Kernel Architecture",
+      "summary": "Host–Guest model separating trusted runtime from sandboxed AI execution",
+      "content": "concepts/dual-kernel.md",
+      "type": "pattern",
+      "stage": ["prompt", "proposal", "validation", "assembly", "execution"],
+      "trust": ["trusted", "sandboxed"],
+      "domain": ["contracts"],
+      "actor": ["host", "guest"],
+      "difficulty": "beginner",
+      "relations": {
+        "enables": ["sandbox-isolation", "ai-safety", "rollback"],
+        "part-of": []
+      },
+      "keywords": ["architecture", "kernel", "security", "isolation"]
+    },
+    
+    "app-definition": {
+      "title": "AppDefinition Schema",
+      "summary": "The IR (Intermediate Representation) that AI produces and Host interprets",
+      "content": "concepts/app-definition.md",
+      "type": "schema",
+      "stage": ["proposal", "validation", "store", "assembly"],
+      "trust": ["untrusted", "gatekeeper", "trusted"],
+      "domain": ["contracts"],
+      "actor": ["ai", "host"],
+      "sourceFiles": ["schemas/index.ts", "types.ts"],
+      "difficulty": "beginner",
+      "relations": {
+        "requires": [],
+        "uses": ["view-node", "machine-definition", "pipeline-definition", "test-vector"],
+        "part-of": ["dual-kernel"]
+      },
+      "keywords": ["schema", "ir", "json", "zod"]
+    },
+    
+    "zod-validation": {
+      "title": "Zod Schema Validation",
+      "summary": "Runtime type checking of AI proposals using Zod schemas",
+      "content": "concepts/zod-validation.md",
+      "type": "technique",
+      "stage": ["validation"],
+      "trust": ["gatekeeper"],
+      "domain": ["verification"],
+      "actor": ["host"],
+      "sourceFiles": ["schemas/index.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "uses": ["app-definition"],
+        "part-of": ["gatekeeper-pipeline"]
+      },
+      "keywords": ["zod", "schema", "validation", "parsing"]
+    },
+    
+    "repair-proposal": {
+      "title": "Proposal Repair",
+      "summary": "Auto-fix common AI mistakes like casing errors and missing arrays",
+      "content": "concepts/repair-proposal.md",
+      "type": "technique",
+      "stage": ["repair"],
+      "trust": ["gatekeeper"],
+      "domain": ["verification"],
+      "actor": ["host"],
+      "sourceFiles": ["schemas/index.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "requires": ["app-definition"],
+        "enables": ["zod-validation"],
+        "part-of": ["gatekeeper-pipeline"]
+      },
+      "keywords": ["repair", "fix", "casing", "normalize"]
+    },
+    
+    "gatekeeper-pipeline": {
+      "title": "Gatekeeper Pipeline",
+      "summary": "Multi-phase verification: repair → schema → semantic → test vectors",
+      "content": "concepts/gatekeeper-pipeline.md",
+      "type": "pattern",
+      "stage": ["validation"],
+      "trust": ["gatekeeper"],
+      "domain": ["verification"],
+      "actor": ["host"],
+      "sourceFiles": ["utils/validator.ts", "schemas/index.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "uses": ["repair-proposal", "zod-validation", "semantic-checks", "test-vectors"],
+        "part-of": ["dual-kernel"]
+      },
+      "keywords": ["gatekeeper", "validation", "pipeline", "security"]
+    },
+    
+    "semantic-checks": {
+      "title": "Semantic Validation Checks",
+      "summary": "Deep verification: structure, pipelines, bindings, events, reachability",
+      "content": "concepts/semantic-checks.md",
+      "type": "technique",
+      "stage": ["validation"],
+      "trust": ["gatekeeper"],
+      "domain": ["verification"],
+      "actor": ["host"],
+      "sourceFiles": ["utils/validator.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "requires": ["app-definition"],
+        "part-of": ["gatekeeper-pipeline"]
+      },
+      "keywords": ["semantic", "structure", "bindings", "events", "pipelines"]
+    },
+    
+    "test-vectors": {
+      "title": "Test Vectors",
+      "summary": "Self-tests embedded in proposals that verify behavior before acceptance",
+      "content": "concepts/test-vectors.md",
+      "type": "technique",
+      "stage": ["validation"],
+      "trust": ["gatekeeper"],
+      "domain": ["verification"],
+      "actor": ["host"],
+      "sourceFiles": ["utils/validator.ts", "schemas/index.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "uses": ["machine-definition"],
+        "part-of": ["gatekeeper-pipeline"]
+      },
+      "keywords": ["test", "vector", "assertion", "self-test"]
+    },
+    
+    "store-comonad": {
+      "title": "Store Comonad",
+      "summary": "Functional lens structure: Store(pos, peek) for focused state access",
+      "content": "concepts/store-comonad.md",
+      "type": "pattern",
+      "stage": ["execution", "migration"],
+      "trust": ["sandboxed", "trusted"],
+      "domain": ["state"],
+      "actor": ["guest", "host"],
+      "sourceFiles": ["services/WasmKernel.ts", "utils/migration.ts"],
+      "difficulty": "advanced",
+      "relations": {
+        "enables": ["prop-lens", "lens-composition"],
+        "part-of": ["lsi-optics"]
+      },
+      "keywords": ["comonad", "store", "lens", "functional", "optics"]
+    },
+    
+    "prop-lens": {
+      "title": "Property Lens",
+      "summary": "Focus on a single property: prop(k)(state) → Store",
+      "content": "concepts/prop-lens.md",
+      "type": "technique",
+      "stage": ["execution", "migration"],
+      "trust": ["sandboxed", "trusted"],
+      "domain": ["state"],
+      "actor": ["guest", "host"],
+      "sourceFiles": ["services/WasmKernel.ts"],
+      "difficulty": "advanced",
+      "relations": {
+        "requires": ["store-comonad"],
+        "enables": ["lens-composition"],
+        "part-of": ["lsi-optics"]
+      },
+      "keywords": ["prop", "lens", "property", "focus"]
+    },
+    
+    "lens-composition": {
+      "title": "Lens Composition",
+      "summary": "Compose lenses for deep path access: compose(ab, bc) → ac",
+      "content": "concepts/lens-composition.md",
+      "type": "technique",
+      "stage": ["execution", "migration"],
+      "trust": ["sandboxed", "trusted"],
+      "domain": ["state"],
+      "actor": ["guest", "host"],
+      "sourceFiles": ["services/WasmKernel.ts"],
+      "difficulty": "advanced",
+      "relations": {
+        "requires": ["prop-lens"],
+        "enables": ["lens-path"],
+        "part-of": ["lsi-optics"]
+      },
+      "keywords": ["compose", "composition", "path", "deep"]
+    },
+    
+    "lens-path": {
+      "title": "Path Lens",
+      "summary": "Dot-path to lens: lensPath('user.profile.name') with caching",
+      "content": "concepts/lens-path.md",
+      "type": "api",
+      "stage": ["execution"],
+      "trust": ["sandboxed"],
+      "domain": ["state"],
+      "actor": ["guest"],
+      "sourceFiles": ["services/WasmKernel.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "requires": ["lens-composition"],
+        "part-of": ["lsi-optics"]
+      },
+      "keywords": ["path", "dot-notation", "cache", "memoize"]
+    },
+    
+    "lens-laws": {
+      "title": "Lens Laws (GetPut/PutGet)",
+      "summary": "Mathematical guarantees: put(s, get(s)) = s and get(put(s, v)) = v",
+      "content": "concepts/lens-laws.md",
+      "type": "pattern",
+      "stage": ["validation", "migration"],
+      "trust": ["gatekeeper", "trusted"],
+      "domain": ["state", "verification"],
+      "actor": ["host"],
+      "sourceFiles": ["utils/migration.ts"],
+      "difficulty": "advanced",
+      "relations": {
+        "requires": ["store-comonad"],
+        "part-of": ["lsi-optics"]
+      },
+      "keywords": ["law", "getput", "putget", "invariant", "correctness"]
+    },
+    
+    "auto-lens": {
+      "title": "AutoLens Migration",
+      "summary": "Bidirectional schema migration preserving compatible context",
+      "content": "concepts/auto-lens.md",
+      "type": "component",
+      "stage": ["migration"],
+      "trust": ["trusted"],
+      "domain": ["state"],
+      "actor": ["host"],
+      "sourceFiles": ["utils/migration.ts"],
+      "difficulty": "advanced",
+      "relations": {
+        "requires": ["lens-laws"],
+        "uses": ["app-definition"],
+        "part-of": ["lsi-optics"]
+      },
+      "keywords": ["migration", "autolens", "bidirectional", "preserve"]
+    },
+    
+    "lsi-optics": {
+      "title": "LSI Optics System",
+      "summary": "Lens/Store/Isomorphism pattern for safe state access and migration",
+      "content": "concepts/lsi-optics.md",
+      "type": "pattern",
+      "stage": ["execution", "migration"],
+      "trust": ["sandboxed", "trusted"],
+      "domain": ["state"],
+      "actor": ["guest", "host"],
+      "sourceFiles": ["services/WasmKernel.ts", "utils/migration.ts"],
+      "difficulty": "advanced",
+      "relations": {
+        "uses": ["store-comonad", "prop-lens", "lens-composition", "lens-laws", "auto-lens"],
+        "part-of": ["dual-kernel"]
+      },
+      "keywords": ["lsi", "optics", "lens", "store", "isomorphism"]
+    },
+    
+    "wasm-sandbox": {
+      "title": "WASM Sandbox",
+      "summary": "QuickJS in Web Worker for isolated pipeline execution",
+      "content": "concepts/wasm-sandbox.md",
+      "type": "component",
+      "stage": ["execution"],
+      "trust": ["sandboxed"],
+      "domain": ["execution"],
+      "actor": ["guest"],
+      "sourceFiles": ["services/WasmKernel.ts"],
+      "difficulty": "advanced",
+      "relations": {
+        "enables": ["tier1-operators", "resource-budgets"],
+        "part-of": ["dual-kernel"]
+      },
+      "keywords": ["wasm", "quickjs", "sandbox", "worker", "isolation"]
+    },
+    
+    "tier1-operators": {
+      "title": "Tier 1 Operators",
+      "summary": "Pure dataflow operators running in WASM sandbox",
+      "content": "concepts/tier1-operators.md",
+      "type": "api",
+      "stage": ["execution"],
+      "trust": ["sandboxed"],
+      "domain": ["execution"],
+      "actor": ["guest"],
+      "sourceFiles": ["operators/registry.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "requires": ["wasm-sandbox"],
+        "part-of": ["operator-registry"]
+      },
+      "keywords": ["operator", "tier1", "pure", "dataflow", "math", "image", "text"]
+    },
+    
+    "tier2-operators": {
+      "title": "Tier 2 Operators",
+      "summary": "Host-executed operators requiring elevated privileges",
+      "content": "concepts/tier2-operators.md",
+      "type": "api",
+      "stage": ["execution"],
+      "trust": ["trusted"],
+      "domain": ["execution"],
+      "actor": ["host"],
+      "sourceFiles": ["operators/registry.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "part-of": ["operator-registry"]
+      },
+      "keywords": ["operator", "tier2", "host", "privileged"]
+    },
+    
+    "operator-registry": {
+      "title": "Operator Registry",
+      "summary": "Central catalog of all dataflow operators with metadata",
+      "content": "concepts/operator-registry.md",
+      "type": "component",
+      "stage": ["proposal", "validation", "execution"],
+      "trust": ["trusted", "sandboxed"],
+      "domain": ["execution"],
+      "actor": ["ai", "host", "guest"],
+      "sourceFiles": ["operators/registry.ts", "operators/index.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "uses": ["tier1-operators", "tier2-operators"]
+      },
+      "keywords": ["registry", "catalog", "operators", "whitelist"]
+    },
+    
+    "pipeline-definition": {
+      "title": "Pipeline Definition",
+      "summary": "Dataflow graph: inputs, nodes with operators, output",
+      "content": "concepts/pipelines.md",
+      "type": "schema",
+      "stage": ["proposal", "validation", "execution"],
+      "trust": ["untrusted", "gatekeeper", "sandboxed"],
+      "domain": ["contracts", "execution"],
+      "actor": ["ai", "host", "guest"],
+      "sourceFiles": ["schemas/index.ts", "types.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "uses": ["operator-registry"],
+        "part-of": ["app-definition"]
+      },
+      "keywords": ["pipeline", "dataflow", "graph", "nodes"]
+    },
+    
+    "machine-definition": {
+      "title": "Machine Definition (FSM)",
+      "summary": "Finite state machine: states, transitions, actions",
+      "content": "concepts/machine-fsm.md",
+      "type": "schema",
+      "stage": ["proposal", "validation", "interaction"],
+      "trust": ["untrusted", "gatekeeper", "trusted"],
+      "domain": ["contracts", "state"],
+      "actor": ["ai", "host"],
+      "sourceFiles": ["schemas/index.ts", "types.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "part-of": ["app-definition"],
+        "enables": ["event-dispatch"]
+      },
+      "keywords": ["fsm", "machine", "state", "transition", "event"]
+    },
+    
+    "view-node": {
+      "title": "View Node",
+      "summary": "UI tree node: type, id, props, bindings, children",
+      "content": "concepts/view-node.md",
+      "type": "schema",
+      "stage": ["proposal", "validation", "assembly"],
+      "trust": ["untrusted", "gatekeeper", "trusted"],
+      "domain": ["contracts", "presentation"],
+      "actor": ["ai", "host"],
+      "sourceFiles": ["schemas/index.ts", "types.ts"],
+      "difficulty": "beginner",
+      "relations": {
+        "part-of": ["app-definition"],
+        "uses": ["context-binding"]
+      },
+      "keywords": ["view", "node", "tree", "ui", "component"]
+    },
+    
+    "component-registry": {
+      "title": "Component Registry",
+      "summary": "Maps view node types to React component factories",
+      "content": "concepts/component-registry.md",
+      "type": "component",
+      "stage": ["assembly", "render"],
+      "trust": ["trusted"],
+      "domain": ["presentation"],
+      "actor": ["host"],
+      "sourceFiles": ["runtime/ComponentRegistry.tsx"],
+      "difficulty": "intermediate",
+      "relations": {
+        "uses": ["view-node"],
+        "part-of": ["runtime-assembler"]
+      },
+      "keywords": ["registry", "component", "factory", "react"]
+    },
+    
+    "runtime-assembler": {
+      "title": "Runtime Assembler",
+      "summary": "Walks view tree, resolves bindings, produces React elements",
+      "content": "concepts/runtime-assembler.md",
+      "type": "component",
+      "stage": ["assembly"],
+      "trust": ["trusted"],
+      "domain": ["presentation"],
+      "actor": ["host"],
+      "sourceFiles": ["runtime/RuntimeAssembler.tsx"],
+      "difficulty": "intermediate",
+      "relations": {
+        "uses": ["component-registry", "context-binding"],
+        "part-of": ["host-runtime"]
+      },
+      "keywords": ["assembler", "render", "traverse", "tree"]
+    },
+    
+    "host-runtime": {
+      "title": "Host Runtime",
+      "summary": "Top-level React component orchestrating assembly and dispatch",
+      "content": "concepts/host-runtime.md",
+      "type": "component",
+      "stage": ["assembly", "render", "interaction"],
+      "trust": ["trusted"],
+      "domain": ["presentation"],
+      "actor": ["host"],
+      "sourceFiles": ["components/HostRuntime.tsx"],
+      "difficulty": "intermediate",
+      "relations": {
+        "uses": ["runtime-assembler", "zustand-store", "event-dispatch"]
+      },
+      "keywords": ["runtime", "host", "react", "render"]
+    },
+    
+    "context-binding": {
+      "title": "Context Binding",
+      "summary": "Connect view props to context values: textBinding, valueBinding",
+      "content": "concepts/context-binding.md",
+      "type": "technique",
+      "stage": ["assembly", "render"],
+      "trust": ["trusted"],
+      "domain": ["presentation", "state"],
+      "actor": ["host"],
+      "sourceFiles": ["runtime/RuntimeAssembler.tsx"],
+      "difficulty": "beginner",
+      "relations": {
+        "uses": ["view-node", "zustand-store"],
+        "part-of": ["runtime-assembler"]
+      },
+      "keywords": ["binding", "context", "props", "reactive"]
+    },
+    
+    "event-dispatch": {
+      "title": "Event Dispatch",
+      "summary": "UI events trigger machine transitions via dispatch(event, payload)",
+      "content": "concepts/event-dispatch.md",
+      "type": "technique",
+      "stage": ["interaction"],
+      "trust": ["trusted"],
+      "domain": ["state"],
+      "actor": ["host", "user"],
+      "sourceFiles": ["components/HostRuntime.tsx", "services/WasmKernel.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "requires": ["machine-definition"],
+        "enables": ["pipeline-execution"]
+      },
+      "keywords": ["event", "dispatch", "transition", "click", "interaction"]
+    },
+    
+    "zustand-store": {
+      "title": "Zustand Store",
+      "summary": "Central state management with Immer for immutable updates",
+      "content": "concepts/zustand-store.md",
+      "type": "component",
+      "stage": ["store"],
+      "trust": ["trusted"],
+      "domain": ["state"],
+      "actor": ["host"],
+      "sourceFiles": ["stores/appStore.ts", "stores/index.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "enables": ["rollback", "context-binding"]
+      },
+      "keywords": ["zustand", "store", "state", "immer", "immutable"]
+    },
+    
+    "rollback": {
+      "title": "Rollback & Change History",
+      "summary": "Undo bad proposals by restoring previous AppDefinition",
+      "content": "concepts/rollback.md",
+      "type": "technique",
+      "stage": ["store"],
+      "trust": ["trusted"],
+      "domain": ["state"],
+      "actor": ["host"],
+      "sourceFiles": ["stores/appStore.ts"],
+      "difficulty": "beginner",
+      "relations": {
+        "requires": ["zustand-store"],
+        "part-of": ["dual-kernel"]
+      },
+      "keywords": ["rollback", "undo", "history", "recovery"]
+    },
+    
+    "ai-provider": {
+      "title": "AI Provider Abstraction",
+      "summary": "Unified interface for Groq, Gemini, Bedrock LLMs",
+      "content": "concepts/ai-provider.md",
+      "type": "component",
+      "stage": ["proposal"],
+      "trust": ["untrusted"],
+      "domain": ["intelligence"],
+      "actor": ["ai"],
+      "sourceFiles": ["services/ai/groq.ts", "services/ai/gemini.ts", "services/ai/bedrock.ts", "services/ai/index.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "uses": ["prompt-builder"],
+        "enables": ["app-definition"]
+      },
+      "keywords": ["ai", "llm", "groq", "gemini", "bedrock", "provider"]
+    },
+    
+    "prompt-builder": {
+      "title": "Prompt Builder",
+      "summary": "Constructs system prompts with operator docs and schema info",
+      "content": "concepts/prompt-builder.md",
+      "type": "component",
+      "stage": ["proposal"],
+      "trust": ["trusted"],
+      "domain": ["intelligence"],
+      "actor": ["host"],
+      "sourceFiles": ["services/ai/promptBuilder.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "uses": ["operator-registry", "serena-bridge"],
+        "enables": ["ai-provider"]
+      },
+      "keywords": ["prompt", "system", "builder", "template"]
+    },
+    
+    "serena-bridge": {
+      "title": "SerenaBridge",
+      "summary": "Two-phase prompt retrieval: menu mode + full specs on demand",
+      "content": "concepts/serena-bridge.md",
+      "type": "component",
+      "stage": ["proposal"],
+      "trust": ["trusted"],
+      "domain": ["intelligence"],
+      "actor": ["host"],
+      "sourceFiles": ["services/SerenaBridge.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "uses": ["operator-registry"],
+        "part-of": ["prompt-builder"]
+      },
+      "keywords": ["serena", "bridge", "menu", "specs", "token"]
+    },
+    
+    "resource-budgets": {
+      "title": "Resource Budgets",
+      "summary": "Time, memory, operation limits for pipeline execution",
+      "content": "concepts/resource-budgets.md",
+      "type": "technique",
+      "stage": ["execution"],
+      "trust": ["sandboxed"],
+      "domain": ["execution"],
+      "actor": ["guest"],
+      "sourceFiles": ["services/WasmKernel.ts", "constants.ts"],
+      "difficulty": "intermediate",
+      "relations": {
+        "part-of": ["wasm-sandbox"]
+      },
+      "keywords": ["budget", "limit", "timeout", "memory", "ops"]
+    }
+  }
+}

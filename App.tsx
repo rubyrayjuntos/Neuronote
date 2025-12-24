@@ -10,7 +10,7 @@ import { AppDefinition, SystemLog, AppContext, VerificationReport, ChangeRecord,
 import { verifyProposal } from './utils/validator';
 import { OPERATOR_REGISTRY } from './operators';
 import { computeDiff, computeSessionMetrics } from './utils/analytics';
-import { migrateContext, salvageContext, verifyLensLaws } from './utils/migration';
+import { migrateContext, migrateContextWithPatches, salvageContext, verifyLensLaws } from './utils/migration';
 import { runHonestyOracle, formatHonestyReport } from './utils/honestyOracle';
 import { useDebounce } from './utils/hooks';
 import { Terminal, Cpu, ShieldCheck, Activity, BrainCircuit, RefreshCw, AlertTriangle, CheckCircle, XCircle, Microscope, GitCommit, Database, Eye } from 'lucide-react';
@@ -500,16 +500,18 @@ export default function App() {
 
       const diff = computeDiff(appDef, proposal);
       
-      // Calculate Migration Preview (Lens.get)
-      const migrationResult = migrateContext(context, proposal);
+      // Calculate Migration Preview with Patches (LSI + Immer)
+      // Generates JSON-Patch artifacts for transparency - "The AI changed field X to Y"
+      const migrationResult = migrateContextWithPatches(context, proposal);
       
       ObservabilityService.recordPhase('MIGRATION_COMPUTED', {
         preserved: migrationResult.stats.preserved,
         dropped: migrationResult.stats.dropped,
         added: migrationResult.stats.added,
         ghost: migrationResult.stats.ghost,
-        ghostKeys: migrationResult.stats.ghostKeys
-      }, `Migration: preserved ${migrationResult.stats.preserved}, dropped ${migrationResult.stats.dropped}, ghost ${migrationResult.stats.ghost}`);
+        ghostKeys: migrationResult.stats.ghostKeys,
+        patchCount: migrationResult.patches.length
+      }, `Migration: preserved ${migrationResult.stats.preserved}, dropped ${migrationResult.stats.dropped}, ghost ${migrationResult.stats.ghost}, patches: ${migrationResult.patches.length}`);
       
       // PROOF OF PRESERVATION: Verify Lens Laws
       const lensCheck = verifyLensLaws(context, proposal);
@@ -525,7 +527,7 @@ export default function App() {
           addLog({ id: generateUUID(), timestamp: Date.now(), source: 'VALIDATOR', type: 'SUCCESS', message: `Lens Laws Satisfied (Bidirectional Integrity Verified)` });
       }
 
-      // Create Full Change Record
+      // Create Full Change Record with Patch Artifacts
       const record: ChangeRecord = {
           id: generateUUID(),
           timestamp: Date.now(),
@@ -540,7 +542,11 @@ export default function App() {
           verificationScore: report.score,
           diff,
           migration: migrationResult.stats,
-          latencyMs: Date.now() - startTime
+          latencyMs: Date.now() - startTime,
+          
+          // JSON-Patch artifacts for transparency and rollback
+          contextPatches: migrationResult.patches,
+          contextInversePatches: migrationResult.inversePatches
       };
 
       if (!report.passed) {

@@ -1,0 +1,202 @@
+{
+  "$schema": "./doc-registry.schema.json",
+  "version": "1.0.0",
+  "generated": null,
+  
+  "taxonomies": {
+    "stage": {
+      "description": "Data flow stages - how a user request becomes a rendered UI",
+      "values": [
+        { "id": "prompt", "label": "1. Prompt", "order": 1, "description": "User input and intent capture" },
+        { "id": "proposal", "label": "2. Proposal", "order": 2, "description": "AI generates AppDefinition" },
+        { "id": "repair", "label": "3. Repair", "order": 3, "description": "Auto-fix common AI mistakes" },
+        { "id": "validation", "label": "4. Validation", "order": 4, "description": "Schema and semantic verification" },
+        { "id": "migration", "label": "5. Migration", "order": 5, "description": "Context preservation via lenses" },
+        { "id": "store", "label": "6. Store", "order": 6, "description": "State management and history" },
+        { "id": "assembly", "label": "7. Assembly", "order": 7, "description": "View tree to React components" },
+        { "id": "render", "label": "8. Render", "order": 8, "description": "DOM output and display" },
+        { "id": "interaction", "label": "9. Interaction", "order": 9, "description": "User events and dispatch" },
+        { "id": "execution", "label": "10. Execution", "order": 10, "description": "Pipeline runs in sandbox" }
+      ]
+    },
+    
+    "trust": {
+      "description": "Trust boundaries - security isolation levels",
+      "values": [
+        { "id": "untrusted", "label": "Untrusted", "color": "#EF4444", "description": "AI-generated content, external input" },
+        { "id": "gatekeeper", "label": "Gatekeeper", "color": "#F59E0B", "description": "Validation and verification layer" },
+        { "id": "trusted", "label": "Trusted Host", "color": "#10B981", "description": "Privileged browser main thread" },
+        { "id": "sandboxed", "label": "Sandboxed Guest", "color": "#3B82F6", "description": "WASM worker isolation" }
+      ]
+    },
+    
+    "domain": {
+      "description": "Domain responsibility - what problem does this solve?",
+      "values": [
+        { "id": "contracts", "label": "Contracts", "icon": "📜", "description": "Schemas, types, AppDefinition structure" },
+        { "id": "intelligence", "label": "Intelligence", "icon": "🧠", "description": "AI providers, prompts, SerenaBridge" },
+        { "id": "verification", "label": "Verification", "icon": "✓", "description": "Validation, test vectors, honesty oracle" },
+        { "id": "state", "label": "State", "icon": "💾", "description": "Store, context, lenses, migration" },
+        { "id": "execution", "label": "Execution", "icon": "⚡", "description": "WASM kernel, operators, pipelines" },
+        { "id": "presentation", "label": "Presentation", "icon": "🖼️", "description": "Assembly, components, registry" },
+        { "id": "observability", "label": "Observability", "icon": "👁️", "description": "Logging, tracing, analytics" }
+      ]
+    },
+    
+    "actor": {
+      "description": "Actor-centric - who/what is acting?",
+      "values": [
+        { "id": "user", "label": "User", "description": "Human interacting with the UI" },
+        { "id": "ai", "label": "AI", "description": "LLM generating proposals" },
+        { "id": "host", "label": "Host Kernel", "description": "Trusted runtime in main thread" },
+        { "id": "guest", "label": "Guest Kernel", "description": "Sandboxed WASM worker" }
+      ]
+    }
+  },
+  
+  "documents": {
+    "system-architecture-overview": {
+      "file": "01-SYSTEM-ARCHITECTURE-OVERVIEW.md",
+      "title": "System Architecture Overview",
+      "summary": "High-level dual-kernel architecture, data flow, and security model",
+      "stage": "prompt",
+      "trust": "trusted",
+      "domain": "contracts",
+      "actors": ["host", "guest", "ai", "user"],
+      "patterns": ["dual-kernel", "ir", "sandbox", "whitelist"],
+      "sourceFiles": [],
+      "dependsOn": [],
+      "relatedTo": ["validation-gates", "sandbox", "assembly"],
+      "keywords": ["architecture", "overview", "introduction", "getting-started"],
+      "difficulty": "beginner",
+      "status": "stable",
+      "lastUpdated": "2025-12-23"
+    },
+    
+    "validation-gates": {
+      "file": "02-VALIDATION-GATES.md",
+      "title": "Validation Gates",
+      "summary": "Multi-phase gatekeeper: schema validation, semantic checks, test vectors",
+      "stage": "validation",
+      "trust": "gatekeeper",
+      "domain": "verification",
+      "actors": ["host"],
+      "patterns": ["zod", "fsm-validation", "test-vectors", "whitelist"],
+      "sourceFiles": ["utils/validator.ts", "schemas/index.ts", "constants.ts"],
+      "dependsOn": ["system-architecture-overview"],
+      "relatedTo": ["proposal-stage", "schemas"],
+      "keywords": ["validation", "verification", "security", "gatekeeper", "zod"],
+      "difficulty": "intermediate",
+      "status": "draft",
+      "lastUpdated": null
+    },
+    
+    "proposal-stage": {
+      "file": "03-PROPOSAL-STAGE.md",
+      "title": "Proposal Stage",
+      "summary": "AI prompt construction, provider abstraction, response parsing",
+      "stage": "proposal",
+      "trust": "untrusted",
+      "domain": "intelligence",
+      "actors": ["ai"],
+      "patterns": ["prompt-engineering", "provider-abstraction", "repair-pattern"],
+      "sourceFiles": ["services/ai/promptBuilder.ts", "services/ai/groq.ts", "services/ai/gemini.ts", "services/SerenaBridge.ts", "schemas/index.ts"],
+      "dependsOn": ["system-architecture-overview"],
+      "relatedTo": ["validation-gates", "operators"],
+      "keywords": ["ai", "llm", "prompt", "groq", "gemini", "bedrock"],
+      "difficulty": "intermediate",
+      "status": "draft",
+      "lastUpdated": null
+    },
+    
+    "sandbox": {
+      "file": "04-SANDBOX.md",
+      "title": "WASM Sandbox",
+      "summary": "QuickJS isolation, Tier 1 operators, resource budgets, message passing",
+      "stage": "execution",
+      "trust": "sandboxed",
+      "domain": "execution",
+      "actors": ["guest"],
+      "patterns": ["wasm", "web-worker", "message-passing", "resource-limits"],
+      "sourceFiles": ["services/WasmKernel.ts", "operators/registry.ts"],
+      "dependsOn": ["system-architecture-overview"],
+      "relatedTo": ["operators", "lenses"],
+      "keywords": ["wasm", "quickjs", "sandbox", "isolation", "worker"],
+      "difficulty": "advanced",
+      "status": "draft",
+      "lastUpdated": null
+    },
+    
+    "testing-suite": {
+      "file": "05-TESTING-SUITE.md",
+      "title": "Testing Suite",
+      "summary": "Test vectors, Vitest setup, test harness, validation testing",
+      "stage": "validation",
+      "trust": "gatekeeper",
+      "domain": "verification",
+      "actors": ["host"],
+      "patterns": ["test-vectors", "vitest", "property-testing"],
+      "sourceFiles": ["utils/harness.ts", "**/*.test.ts"],
+      "dependsOn": ["validation-gates"],
+      "relatedTo": ["proposal-stage"],
+      "keywords": ["testing", "vitest", "test-vectors", "tdd"],
+      "difficulty": "intermediate",
+      "status": "draft",
+      "lastUpdated": null
+    },
+    
+    "lenses": {
+      "file": "06-LENSES.md",
+      "title": "Lenses (LSI Optics)",
+      "summary": "Store comonad, prop lens, composition, AutoLens migration, lens laws",
+      "stage": "migration",
+      "trust": "trusted",
+      "domain": "state",
+      "actors": ["host", "guest"],
+      "patterns": ["lens", "comonad", "functional-optics", "bidirectional"],
+      "sourceFiles": ["services/WasmKernel.ts", "utils/migration.ts"],
+      "dependsOn": ["system-architecture-overview"],
+      "relatedTo": ["store", "sandbox"],
+      "keywords": ["lens", "optics", "comonad", "migration", "getput", "putget"],
+      "difficulty": "advanced",
+      "status": "draft",
+      "lastUpdated": null
+    },
+    
+    "assembly": {
+      "file": "07-ASSEMBLY.md",
+      "title": "Runtime Assembly",
+      "summary": "View tree traversal, component registry, binding resolution, React rendering",
+      "stage": "assembly",
+      "trust": "trusted",
+      "domain": "presentation",
+      "actors": ["host"],
+      "patterns": ["component-registry", "factory-pattern", "binding"],
+      "sourceFiles": ["runtime/RuntimeAssembler.tsx", "runtime/ComponentRegistry.tsx", "components/HostRuntime.tsx"],
+      "dependsOn": ["system-architecture-overview", "validation-gates"],
+      "relatedTo": ["store"],
+      "keywords": ["assembly", "render", "components", "react", "registry"],
+      "difficulty": "intermediate",
+      "status": "draft",
+      "lastUpdated": null
+    },
+    
+    "operators": {
+      "file": "08-OPERATORS.md",
+      "title": "Operators",
+      "summary": "Tier 1/2 operators, registry, dataflow primitives, purity guarantees",
+      "stage": "execution",
+      "trust": "sandboxed",
+      "domain": "execution",
+      "actors": ["guest"],
+      "patterns": ["dataflow", "pure-functions", "operator-registry"],
+      "sourceFiles": ["operators/registry.ts", "operators/types.ts", "operators/menu.ts"],
+      "dependsOn": ["sandbox"],
+      "relatedTo": ["proposal-stage"],
+      "keywords": ["operators", "dataflow", "math", "image", "text", "pipeline"],
+      "difficulty": "intermediate",
+      "status": "draft",
+      "lastUpdated": null
+    }
+  }
+}

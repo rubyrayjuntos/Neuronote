@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://neuronote.dev/schemas/concept-graph.schema.json",
+  "title": "NeuroNote Concept Graph",
+  "description": "Atomic documentation units with multi-dimensional facets",
+  "type": "object",
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "type": "string" },
+    
+    "facets": {
+      "type": "object",
+      "description": "Defines all available filter dimensions",
+      "additionalProperties": {
+        "$ref": "#/$defs/Facet"
+      }
+    },
+    
+    "concepts": {
+      "type": "object",
+      "description": "Map of concept ID to concept definition",
+      "additionalProperties": {
+        "$ref": "#/$defs/Concept"
+      }
+    }
+  },
+  "required": ["version", "facets", "concepts"],
+  
+  "$defs": {
+    "Facet": {
+      "type": "object",
+      "properties": {
+        "label": { "type": "string" },
+        "description": { "type": "string" },
+        "icon": { "type": "string" },
+        "values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "label": { "type": "string" },
+              "color": { "type": "string" },
+              "order": { "type": "integer" }
+            },
+            "required": ["label"]
+          }
+        }
+      },
+      "required": ["label", "values"]
+    },
+    
+    "Concept": {
+      "type": "object",
+      "properties": {
+        "title": { 
+          "type": "string",
+          "description": "Human-readable title"
+        },
+        "summary": { 
+          "type": "string",
+          "description": "One-line description",
+          "maxLength": 200
+        },
+        "content": { 
+          "type": "string",
+          "description": "Path to markdown file with full content"
+        },
+        "stage": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Which data flow stages this applies to"
+        },
+        "trust": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Which trust boundaries this operates in"
+        },
+        "domain": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Which domain responsibilities"
+        },
+        "actor": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Which actors are involved"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["pattern", "technique", "component", "schema", "api", "guide"],
+          "description": "What kind of concept"
+        },
+        "sourceFiles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Related source code files"
+        },
+        "relations": {
+          "type": "object",
+          "description": "How this concept relates to others",
+          "properties": {
+            "requires": { "type": "array", "items": { "type": "string" } },
+            "enables": { "type": "array", "items": { "type": "string" } },
+            "uses": { "type": "array", "items": { "type": "string" } },
+            "part-of": { "type": "array", "items": { "type": "string" } },
+            "see-also": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "keywords": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "difficulty": {
+          "type": "string",
+          "enum": ["beginner", "intermediate", "advanced"]
+        }
+      },
+      "required": ["title", "summary"]
+    }
+  }
+}

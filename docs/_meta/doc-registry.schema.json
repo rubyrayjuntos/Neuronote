@@ -1,0 +1,194 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://neuronote.dev/schemas/doc-registry.schema.json",
+  "title": "NeuroNote Documentation Registry",
+  "description": "Schema for multi-dimensional documentation navigation",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Reference to this schema"
+    },
+    "version": {
+      "type": "string",
+      "description": "Registry schema version",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "generated": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When nav files were last generated"
+    },
+    "taxonomies": {
+      "type": "object",
+      "description": "Defines the organizational dimensions",
+      "properties": {
+        "stage": {
+          "type": "object",
+          "description": "Data flow stages (Option A)",
+          "properties": {
+            "description": { "type": "string" },
+            "values": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "label": { "type": "string" },
+                  "order": { "type": "integer" },
+                  "description": { "type": "string" }
+                },
+                "required": ["id", "label", "order"]
+              }
+            }
+          }
+        },
+        "trust": {
+          "type": "object",
+          "description": "Trust boundaries (Option B)",
+          "properties": {
+            "description": { "type": "string" },
+            "values": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "label": { "type": "string" },
+                  "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+                  "description": { "type": "string" }
+                },
+                "required": ["id", "label"]
+              }
+            }
+          }
+        },
+        "domain": {
+          "type": "object",
+          "description": "Domain responsibility (Option C)",
+          "properties": {
+            "description": { "type": "string" },
+            "values": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "label": { "type": "string" },
+                  "icon": { "type": "string" },
+                  "description": { "type": "string" }
+                },
+                "required": ["id", "label"]
+              }
+            }
+          }
+        },
+        "actor": {
+          "type": "object",
+          "description": "Actor-centric view (Option D)",
+          "properties": {
+            "description": { "type": "string" },
+            "values": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "label": { "type": "string" },
+                  "description": { "type": "string" }
+                },
+                "required": ["id", "label"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "documents": {
+      "type": "object",
+      "description": "Map of document ID to document metadata",
+      "additionalProperties": {
+        "$ref": "#/$defs/Document"
+      }
+    }
+  },
+  "required": ["version", "taxonomies", "documents"],
+  "$defs": {
+    "Document": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Relative path from docs/ to the markdown file"
+        },
+        "title": {
+          "type": "string",
+          "description": "Human-readable title"
+        },
+        "summary": {
+          "type": "string",
+          "description": "One-line description for indexes",
+          "maxLength": 200
+        },
+        "stage": {
+          "type": "string",
+          "description": "Primary data flow stage"
+        },
+        "trust": {
+          "type": "string",
+          "description": "Primary trust boundary"
+        },
+        "domain": {
+          "type": "string",
+          "description": "Primary domain responsibility"
+        },
+        "actors": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Which actors are involved"
+        },
+        "patterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Design patterns, libraries, techniques used"
+        },
+        "sourceFiles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Source code files this doc covers"
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Other doc IDs that should be read first"
+        },
+        "relatedTo": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Other doc IDs that are related but not prerequisites"
+        },
+        "keywords": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Search keywords not in title/summary"
+        },
+        "difficulty": {
+          "type": "string",
+          "enum": ["beginner", "intermediate", "advanced"],
+          "description": "Assumed reader expertise level"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "review", "stable", "deprecated"],
+          "description": "Documentation maturity"
+        },
+        "lastUpdated": {
+          "type": "string",
+          "format": "date",
+          "description": "When this doc was last significantly updated"
+        }
+      },
+      "required": ["file", "title", "domain"]
+    }
+  }
+}

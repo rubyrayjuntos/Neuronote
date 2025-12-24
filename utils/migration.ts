@@ -1,4 +1,19 @@
-import { AppContext, AppDefinition, MigrationStats } from '../types';
+import { AppContext, AppDefinition, MigrationStats, JsonPatch } from '../types';
+import { enablePatches, produce, produceWithPatches, Patch } from 'immer';
+
+// Enable Immer patches globally for this module
+enablePatches();
+
+/**
+ * Convert Immer Patch to our JsonPatch format (RFC 6902 compatible)
+ */
+function toJsonPatch(immerPatch: Patch): JsonPatch {
+  return {
+    op: immerPatch.op,
+    path: immerPatch.path,
+    value: immerPatch.value
+  };
+}
 
 /**
  * A Bidirectional Lens for Malleable State.
@@ -8,6 +23,16 @@ import { AppContext, AppDefinition, MigrationStats } from '../types';
 export interface Lens<S, T> {
   get: (source: S) => T;         // Forward Migration (Evolution)
   put: (source: S, target: T) => S; // Backward Migration (Salvage/Rollback)
+}
+
+/**
+ * Result of a migration with patch artifacts for transparency
+ */
+export interface MigrationResult {
+  context: AppContext;
+  stats: MigrationStats;
+  patches: JsonPatch[];         // Forward patches (what changed)
+  inversePatches: JsonPatch[];  // Inverse patches (how to undo)
 }
 
 interface AutoLensResult {
@@ -158,7 +183,94 @@ export function migrateContext(prevContext: AppContext, nextDef: AppDefinition):
   };
 }
 
-// New: Explicit Recovery function using Lens.put
+/**
+ * Migrate context with Immer patch generation for full transparency.
+ * 
+ * Schema migrations are executed via a Lens System Implementation (LSI) running 
+ * inside Immer producers. This combination ensures that all transformations—
+ * whether 'forward' evolution or 'backward' salvage—are atomic and immutable. 
+ * 
+ * The system generates explicit JSON-Patch artifacts for every migration step, 
+ * allowing users to inspect the exact data delta before accepting a new feature version.
+ * 
+ * @param prevContext - The context before migration
+ * @param nextDef - The new AppDefinition schema
+ * @returns MigrationResult with context, stats, and JSON-Patch artifacts
+ */
+export function migrateContextWithPatches(prevContext: AppContext, nextDef: AppDefinition): MigrationResult {
+  const mockSourceDef: AppDefinition = { ...nextDef, initialContext: prevContext }; 
+  const lens = new AutoLens(mockSourceDef, nextDef);
+  
+  // Use Immer's produceWithPatches to generate patch artifacts
+  const [nextContext, patches, inversePatches] = produceWithPatches(prevContext, (draft) => {
+    // Apply lens transformation within Immer producer
+    const evolved = lens.get(prevContext);
+    
+    // Clear and rebuild draft to capture all changes
+    Object.keys(draft).forEach(key => {
+      if (!key.startsWith('_') && !(key in evolved)) {
+        delete draft[key];
+      }
+    });
+    
+    Object.keys(evolved).forEach(key => {
+      if (!key.startsWith('_')) {
+        draft[key] = evolved[key];
+      }
+    });
+  });
+  
+  return {
+    context: nextContext,
+    stats: calculateMigrationStats(prevContext, nextContext, nextDef),
+    patches: patches.map(toJsonPatch),
+    inversePatches: inversePatches.map(toJsonPatch)
+  };
+}
+
+/**
+ * Salvage context with Immer patch generation.
+ * Used during rollbacks to preserve edits made in the "bad" version.
+ * 
+ * @param brokenContext - Context from the failed proposal
+ * @param targetDef - The previous (good) AppDefinition to roll back to
+ * @returns Object with salvaged context and patches
+ */
+export function salvageContextWithPatches(brokenContext: AppContext, targetDef: AppDefinition): {
+  context: AppContext;
+  patches: JsonPatch[];
+  inversePatches: JsonPatch[];
+} {
+  const mockBrokenDef: AppDefinition = { ...targetDef, initialContext: brokenContext };
+  const lens = new AutoLens(targetDef, mockBrokenDef);
+  
+  const [salvagedContext, patches, inversePatches] = produceWithPatches(
+    targetDef.initialContext,
+    (draft) => {
+      const salvaged = lens.put(targetDef.initialContext, brokenContext);
+      
+      Object.keys(draft).forEach(key => {
+        if (!key.startsWith('_') && !(key in salvaged)) {
+          delete draft[key];
+        }
+      });
+      
+      Object.keys(salvaged).forEach(key => {
+        if (!key.startsWith('_')) {
+          draft[key] = salvaged[key];
+        }
+      });
+    }
+  );
+  
+  return {
+    context: salvagedContext,
+    patches: patches.map(toJsonPatch),
+    inversePatches: inversePatches.map(toJsonPatch)
+  };
+}
+
+// Legacy wrapper - still works without patches
 export function salvageContext(brokenContext: AppContext, targetDef: AppDefinition): AppContext {
   // We treat 'brokenContext' as the Target (the state we are retreating FROM)
   // We treat 'targetDef' as the Source (the state we are retreating TO)

@@ -218,6 +218,16 @@ export interface MigrationStats {
   details: string;
 }
 
+/**
+ * JSON-Patch (RFC 6902) operation for transparent state diffs.
+ * Used by Immer's produceWithPatches to generate auditable deltas.
+ */
+export interface JsonPatch {
+  op: 'replace' | 'add' | 'remove';
+  path: (string | number)[];
+  value?: unknown;
+}
+
 export interface ChangeRecord {
   id: string;
   timestamp: number;
@@ -236,6 +246,19 @@ export interface ChangeRecord {
   migration?: MigrationStats;
   latencyMs: number;
   version: string;
+  
+  /**
+   * Immer patches for context migration (forward evolution).
+   * Provides a readable JSON-Patch diff of exactly what the migration did.
+   * e.g., [{ op: 'add', path: ['theme'], value: 'dark' }]
+   */
+  contextPatches?: JsonPatch[];
+  
+  /**
+   * Inverse patches for rollback (backward salvage).
+   * Applying these restores the previous context state.
+   */
+  contextInversePatches?: JsonPatch[];
 }
 
 export interface SessionMetrics {
