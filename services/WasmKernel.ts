@@ -110,11 +110,174 @@ const lensPath = (path) => {
 `;
 
 /**
- * THE LOGIC KERNEL (Guest Code)
- * This runs inside QuickJS.
+ * Generate the kernel source with Tier 1 operators injected.
+ * This runs inside QuickJS WASM sandbox.
  */
-const KERNEL_SOURCE = `
+function generateKernelSource(): string {
+  // Get Tier 1 operator implementations as source code
+  const tier1OperatorsSource = generateTier1OperatorsSource();
+  
+  return `
 ${OPTICS_SOURCE}
+
+// === TIER 1 OPERATORS (Pure, Sync) ===
+// Injected from operators/registry.ts - these run INSIDE QuickJS sandbox
+${tier1OperatorsSource}
+
+// === TIER 2 OPERATOR NAMES ===
+// These require Worker APIs (OffscreenCanvas, AudioContext) - escalate to native Worker
+const TIER2_OPS = new Set([
+  'Image.Decode', 'Image.Grayscale', 'Image.Invert', 'Image.EdgeDetect',
+  'Image.Resize', 'Image.Threshold', 'Image.Blur',
+  'CV.ContourTrace', 'CV.Vectorize',
+  'Audio.Decode', 'Audio.FFT', 'Audio.PeakDetect', 'Audio.BeatDetect'
+]);
+
+// === TIER 1 PIPELINE EXECUTOR ===
+// Runs entirely inside QuickJS sandbox with fuel metering
+
+/**
+ * Check if a pipeline can run entirely in Tier 1 (no Tier 2 operators)
+ */
+function isPureTier1Pipeline(pipeId) {
+  const pipe = definition.pipelines ? definition.pipelines[pipeId] : null;
+  if (!pipe || !pipe.nodes) return false;
+  return pipe.nodes.every(node => !TIER2_OPS.has(node.op));
+}
+
+/**
+ * Topological sort for pipeline node execution order
+ */
+function getExecutionOrder(nodes) {
+  const adj = {};
+  const inDegree = {};
+  const nodeMap = {};
+  
+  nodes.forEach(n => {
+    adj[n.id] = [];
+    inDegree[n.id] = 0;
+    nodeMap[n.id] = n;
+  });
+  
+  nodes.forEach(n => {
+    Object.values(n.inputs).forEach(ref => {
+      if (typeof ref === 'string' && ref.startsWith('@')) {
+        const targetId = ref.substring(1).split('.')[0];
+        if (adj[targetId]) {
+          adj[targetId].push(n.id);
+          inDegree[n.id]++;
+        }
+      }
+    });
+  });
+  
+  const queue = nodes.filter(n => inDegree[n.id] === 0).map(n => n.id);
+  const order = [];
+  
+  while(queue.length > 0) {
+    const u = queue.shift();
+    order.push(nodeMap[u]);
+    
+    adj[u].forEach(v => {
+      inDegree[v]--;
+      if (inDegree[v] === 0) queue.push(v);
+    });
+  }
+  
+  if (order.length !== nodes.length) throw new Error("Cycle detected in pipeline");
+  return order;
+}
+
+/**
+ * Execute a Tier 1 pipeline entirely inside QuickJS sandbox.
+ * Returns { output, trace } on success or throws on error.
+ */
+function executeTier1Pipeline(pipeId, scopeId) {
+  const pipe = definition.pipelines[pipeId];
+  if (!pipe) throw new Error("Pipeline not found: " + pipeId);
+  
+  const nodeResults = {};
+  
+  // Resolve input values from context
+  function resolveInput(ref) {
+    if (typeof ref !== 'string') return ref;
+    
+    if (ref.startsWith('$')) {
+      // Pipeline input from context
+      const key = ref.substring(1);
+      const inputType = pipe.inputs ? pipe.inputs[key] : null;
+      
+      // Get from appropriate scope
+      let sourceData;
+      if (scopeId === 'root') {
+        sourceData = context;
+      } else {
+        sourceData = (context.actors && context.actors[scopeId]) || {};
+      }
+      return sourceData[key];
+    }
+    
+    if (ref.startsWith('@')) {
+      // Reference to another node's output
+      const parts = ref.substring(1).split('.');
+      const nodeId = parts[0];
+      let result = nodeResults[nodeId];
+      for (let i = 1; i < parts.length; i++) {
+        if (result && typeof result === 'object') {
+          result = result[parts[i]];
+        }
+      }
+      return result;
+    }
+    
+    return ref;
+  }
+  
+  const startTime = Date.now();
+  const trace = {
+    pipelineId: pipeId,
+    runId: 'qjs_' + Math.random().toString(36).substring(7),
+    timestamp: startTime,
+    status: 'success',
+    totalDurationMs: 0,
+    nodeTraces: [],
+    tier: 1  // Mark as Tier 1 execution
+  };
+  
+  try {
+    const sortedNodes = getExecutionOrder(pipe.nodes);
+    
+    for (const node of sortedNodes) {
+      const nodeStart = Date.now();
+      const inputs = Object.values(node.inputs).map(resolveInput);
+      const op = TIER1_OPERATORS[node.op];
+      
+      if (!op) throw new Error("Unknown Tier 1 operator: " + node.op);
+      
+      // Execute the operator (fuel metering happens via QuickJS interrupt handler)
+      const result = op(inputs);
+      nodeResults[node.id] = result;
+      
+      trace.nodeTraces.push({
+        nodeId: node.id,
+        op: node.op,
+        status: 'success',
+        durationMs: Date.now() - nodeStart,
+        outputSummary: typeof result
+      });
+    }
+    
+    trace.totalDurationMs = Date.now() - startTime;
+    const output = pipe.output ? nodeResults[pipe.output] : null;
+    return { output, trace };
+    
+  } catch (e) {
+    trace.status = 'failed';
+    trace.error = e.message;
+    trace.totalDurationMs = Date.now() - startTime;
+    throw e;
+  }
+}
 
 let context = {};
 let definition = {};
@@ -222,14 +385,44 @@ const CAPABILITY_MANIFEST = {
             delete context._sys.actorStates[scopeId];
         }
     },
-    // NEW: TIER 2 SCHEDULING
+    // PIPELINE EXECUTION - Tier 1 runs here, Tier 2 escalates to Worker
     RUN: {
         minArgs: 2,
-        exec: (args, { scopeId }) => {
+        exec: (args, { scopeId, getScopedData, setScopedData }) => {
             const pipelineId = args[0];
             const targetKey = args[1];
-            // Push to scheduler queue
-            pendingTasks.push({ pipelineId, targetKey, scopeId });
+            
+            // Check if pipeline is pure Tier 1 (all operators are sync/pure)
+            if (isPureTier1Pipeline(pipelineId)) {
+                // Execute entirely in QuickJS sandbox (fuel metered)
+                const { output, trace } = executeTier1Pipeline(pipelineId, scopeId);
+                
+                // Store result using lens
+                const focus = lensPath(targetKey);
+                let targetState;
+                if (scopeId === 'root') {
+                    targetState = context;
+                } else {
+                    if (!context.actors) context.actors = {};
+                    if (!context.actors[scopeId]) context.actors[scopeId] = {};
+                    targetState = context.actors[scopeId];
+                }
+                const store = focus(targetState);
+                const nextState = store.peek(output);
+                
+                if (scopeId === 'root') {
+                    context = nextState;
+                } else {
+                    context.actors[scopeId] = nextState;
+                }
+                
+                // Store trace for reporting
+                if (!context._pipelineTraces) context._pipelineTraces = [];
+                context._pipelineTraces.push(trace);
+            } else {
+                // Has Tier 2 operators - escalate to native Worker
+                pendingTasks.push({ pipelineId, targetKey, scopeId });
+            }
         }
     }
 };
@@ -260,7 +453,8 @@ function executeAction(actionString, scopeId, payload) {
 // --- DISPATCHER ---
 globalThis.dispatch = function(event, payload, scopeId) {
     if (!scopeId) scopeId = 'root';
-    pendingTasks = []; // Reset queue
+    pendingTasks = []; // Reset Tier 2 queue
+    context._pipelineTraces = []; // Reset Tier 1 traces
 
     if (event.startsWith('UPDATE_CONTEXT')) {
         const key = event.split(':')[1];
@@ -287,15 +481,15 @@ globalThis.dispatch = function(event, payload, scopeId) {
         }
         // --- LENS INTEGRATION END ---
 
-        return { context, tasks: [] };
+        return { context, tasks: [], tier1Traces: [] };
     }
 
     const actor = resolveActor(scopeId);
-    if (!actor) return { context, tasks: [] };
+    if (!actor) return { context, tasks: [], tier1Traces: context._pipelineTraces || [] };
     
     const { def, state } = actor;
     const machineState = def.states[state];
-    if (!machineState) return { context, tasks: [] };
+    if (!machineState) return { context, tasks: [], tier1Traces: context._pipelineTraces || [] };
     
     const transitionDef = machineState.on ? machineState.on[event] : null;
     
@@ -315,9 +509,13 @@ globalThis.dispatch = function(event, payload, scopeId) {
         }
     }
     
-    return { context, tasks: pendingTasks };
+    // Return Tier 1 traces and Tier 2 tasks
+    const tier1Traces = context._pipelineTraces || [];
+    delete context._pipelineTraces; // Clean up temporary storage
+    return { context, tasks: pendingTasks, tier1Traces };
 };
 `;
+}
 
 /**
  * THE WORKER BLOB
@@ -336,7 +534,8 @@ const MAX_OUTPUT_BYTES = ${MAX_OUTPUT_BYTES};
 
 ${OPTICS_SOURCE}
 
-const KERNEL_SOURCE = ${JSON.stringify(KERNEL_SOURCE)};
+// KERNEL_SOURCE is injected at boot time with Tier 1 operators
+/* KERNEL_SOURCE_INJECTION_POINT */
 
 let runtime = null;
 let vm = null;
@@ -1030,19 +1229,21 @@ self.onmessage = async (e) => {
            throw new Error("Dispatch Error: " + JSON.stringify(err));
        }
        
-       const resultObj = vm.dump(res.value); // { context, tasks }
+       const resultObj = vm.dump(res.value); // { context, tasks, tier1Traces }
        res.value.dispose();
 
        globalContext = resultObj.context;
        const tasks = resultObj.tasks || [];
-       const traces = [];
+       const tier1Traces = resultObj.tier1Traces || [];  // Traces from QuickJS Tier 1 execution
+       const tier2Traces = [];
 
        // --- TIER 2 EXECUTION ---
-       // If QuickJS returned tasks, execute them in Native Worker
+       // Only execute pipelines that have Tier 2 operators (escalated from QuickJS)
        if (tasks.length > 0) {
            for (const task of tasks) {
                const { output, trace } = await executePipeline(task.pipelineId, task.scopeId);
-               traces.push(trace);
+               trace.tier = 2;  // Mark as Tier 2 execution
+               tier2Traces.push(trace);
                
                if (trace.status === 'success') {
                    // Merge Result using Lenses (LSI)
@@ -1069,7 +1270,9 @@ self.onmessage = async (e) => {
            }
        }
 
-       self.postMessage({ type: 'SUCCESS', id, payload: { context: globalContext, traces } });
+       // Merge Tier 1 (from QuickJS) and Tier 2 (from Worker) traces
+       const allTraces = [...tier1Traces, ...tier2Traces];
+       self.postMessage({ type: 'SUCCESS', id, payload: { context: globalContext, traces: allTraces } });
     }
 
     if (type === 'TEST_HANG') {
@@ -1105,10 +1308,19 @@ export class WasmKernel {
     // Generate Tier 1 operators from the registry (single source of truth)
     const tier1OperatorsCode = generateTier1OperatorsSource();
     
-    // Inject Tier 1 operators into the Worker blob
-    const workerCode = WORKER_BLOB.replace(
+    // Generate the kernel source with Tier 1 operators for QuickJS
+    const kernelSource = generateKernelSource();
+    
+    // Inject both:
+    // 1. KERNEL_SOURCE with Tier 1 operators (for QuickJS sandbox execution)
+    // 2. TIER1_OPERATORS in Worker scope (for Tier 2 pipeline fallback)
+    let workerCode = WORKER_BLOB.replace(
       '/* TIER1_OPERATORS_INJECTION_POINT */',
       tier1OperatorsCode
+    );
+    workerCode = workerCode.replace(
+      '/* KERNEL_SOURCE_INJECTION_POINT */',
+      'const KERNEL_SOURCE = `' + kernelSource.replace(/`/g, '\\`').replace(/\$/g, '\\$') + '`;'
     );
     
     const blob = new Blob([workerCode], { type: "application/javascript" });
