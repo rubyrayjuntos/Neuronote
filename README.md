@@ -221,6 +221,19 @@ npm test
 npm run build
 ```
 
+### Deployment
+
+The landing page is automatically deployed to GitHub Pages on every push to the `main` branch.
+
+**Live Site**: [https://rubyrayjuntos.github.io/Neuronote/](https://rubyrayjuntos.github.io/Neuronote/)
+
+To manually trigger a deployment:
+1. Go to the **Actions** tab in GitHub
+2. Select "Deploy to GitHub Pages"
+3. Click "Run workflow"
+
+The deployment workflow is configured in `.github/workflows/deploy.yml` and deploys the contents of the `/landing` directory.
+
 ---
 
 ## Project Structure
